@@ -1,11 +1,12 @@
 package fr.antschw.lambda;
 
-import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.annotation.Nonnull;
+import org.jetbrains.annotations.NotNull;
 
-@ApplicationScoped
 public class GreetingService {
 
-    public String greeting(String name) {
+    @NotNull
+    public String greeting(@Nonnull String name) {
         return "hello " + name;
     }
 }

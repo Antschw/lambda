@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Zip du profil prod : lib/ = lambda-shade + les dépendances promues par le shade -->
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.2.0 https://maven.apache.org/xsd/assembly-2.2.0.xsd">
+    <id>dist</id>
+    <formats>
+        <format>zip</format>
+    </formats>
+    <includeBaseDirectory>true</includeBaseDirectory>
+
+    <componentDescriptors>
+        <componentDescriptor>src/main/assembly/common.xml</componentDescriptor>
+    </componentDescriptors>
+
+    <dependencySets>
+        <dependencySet>
+            <outputDirectory>lib</outputDirectory>
+            <useProjectArtifact>false</useProjectArtifact>
+            <outputFileNameMapping>${artifact.artifactId}-${artifact.version}.${artifact.extension}</outputFileNameMapping>
+            <!--
+                Ce que le shade a déjà EMBARQUÉ dans lambda-shade.jar (cf. artifactSet de lambda-shade).
+                Nécessaire car, dans un build multi-modules (Maven 3.9 comme 3.10), Maven lit le pom.xml
+                d'origine de lambda-shade et non son dependency-reduced-pom : ces jars arriveraient
+                sinon par transitivité, en double. Le jar promu (org.jetbrains:annotations) est conservé.
+                useTransitiveFiltering=false (défaut) : on exclut ces artefacts seuls, pas leurs descendants.
+            -->
+            <excludes>
+                <exclude>fr.antschw.lambda:lambda</exclude>
+                <exclude>jakarta.annotation:jakarta.annotation-api</exclude>
+            </excludes>
+        </dependencySet>
+    </dependencySets>
+</assembly>

@@ -5,14 +5,13 @@
     <modelVersion>4.0.0</modelVersion>
 
     <!--
-        Reprend le module "lambda" et le fusionne avec toutes ses dépendances
-        dans un seul jar (maven-shade-plugin).
+        Reprend "lambda" dans un jar shadé :
+        - EMBARQUÉS (artifactSet/includes) : lambda + jakarta.annotation-api
+        - PROMU (promoteTransitiveDependencies) : org.jetbrains:annotations, non embarqué,
+          devient une dépendance directe du dependency-reduced-pom.
 
-        META-INF/jandex.idx de "lambda" est conservé : le bean CDI reste découvert par Quarkus.
-
-        Le "dependency-reduced-pom" est le pom publié pour ce module :
-        toutes les dépendances déjà incluses dans le jar en sont retirées,
-        donc un consommateur de lambda-shade ne récupère AUCUNE dépendance transitive.
+        Le dependency-reduced-pom (dependency-reduced-pom.xml) remplace le pom de ce module :
+        il ne déclare plus que org.jetbrains:annotations.
     -->
     <parent>
         <groupId>fr.antschw.lambda</groupId>
@@ -34,47 +33,31 @@
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-jar-plugin</artifactId>
-                <configuration>
-                    <!-- Pas de sources dans ce module : le jar "vide" est normal, il est remplacé par le shade -->
-                    <skipIfEmpty>false</skipIfEmpty>
-                </configuration>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
                 <executions>
                     <execution>
-                        <id>shade-lambda</id>
                         <phase>package</phase>
                         <goals>
                             <goal>shade</goal>
                         </goals>
                         <configuration>
-                            <!-- Génère le pom réduit (sans les dépendances embarquées) -->
-                            <createDependencyReducedPom>true</createDependencyReducedPom>
-                            <dependencyReducedPomLocation>${project.build.directory}/dependency-reduced-pom.xml</dependencyReducedPomLocation>
-                            <!-- Le jar shadé REMPLACE l'artefact principal lambda-shade-x.y.z.jar -->
-                            <shadedArtifactAttached>false</shadedArtifactAttached>
+                            <promoteTransitiveDependencies>true</promoteTransitiveDependencies>
+                            <artifactSet>
+                                <includes>
+                                    <include>fr.antschw.lambda:lambda</include>
+                                    <include>jakarta.annotation:jakarta.annotation-api</include>
+                                </includes>
+                            </artifactSet>
                             <filters>
                                 <filter>
-                                    <!-- Retire les signatures des jars d'origine (invalides une fois fusionnés) -->
+                                    <!-- module-info.class et MANIFEST des jars embarqués n'ont pas de sens une fois fusionnés -->
                                     <artifact>*:*</artifact>
                                     <excludes>
-                                        <exclude>META-INF/*.SF</exclude>
-                                        <exclude>META-INF/*.DSA</exclude>
-                                        <exclude>META-INF/*.RSA</exclude>
-                                        <exclude>META-INF/MANIFEST.MF</exclude>
                                         <exclude>module-info.class</exclude>
-                                        <exclude>META-INF/versions/*/module-info.class</exclude>
+                                        <exclude>META-INF/MANIFEST.MF</exclude>
                                     </excludes>
                                 </filter>
                             </filters>
-                            <transformers>
-                                <!-- Fusionne les fichiers META-INF/services/* (ServiceLoader) -->
-                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
-                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer"/>
-                            </transformers>
                         </configuration>
                     </execution>
                 </executions>

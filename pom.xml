@@ -6,9 +6,9 @@
 
     <!--
         Projet parent : il ne produit rien lui-même, il orchestre le build.
-        - <modules>            : liste des sous-projets construits par le reactor
-        - <dependencyManagement>: versions centralisées (BOM Quarkus + modules internes)
-        - <pluginManagement>   : versions/configuration communes des plugins
+        - <modules>             : sous-projets construits par le reactor
+        - <dependencyManagement>: versions centralisées
+        - <pluginManagement>    : versions des plugins
     -->
     <groupId>fr.antschw.lambda</groupId>
     <artifactId>lambda-parent</artifactId>
@@ -27,31 +27,30 @@
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
-        <!-- Quarkus -->
-        <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
-        <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
-        <quarkus.platform.version>3.40.1</quarkus.platform.version>
+        <!-- Dépendances -->
+        <jakarta.annotation-api.version>3.0.0</jakarta.annotation-api.version>
+        <jetbrains-annotations.version>26.1.0</jetbrains-annotations.version>
 
         <!-- Plugins -->
         <compiler-plugin.version>3.16.0</compiler-plugin.version>
-        <surefire-plugin.version>3.6.0</surefire-plugin.version>
         <jar-plugin.version>3.5.1</jar-plugin.version>
         <shade-plugin.version>3.6.2</shade-plugin.version>
         <assembly-plugin.version>3.8.0</assembly-plugin.version>
-        <jandex-plugin.version>3.6.0</jandex-plugin.version>
+        <enforcer-plugin.version>3.6.3</enforcer-plugin.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
-            <!-- BOM Quarkus : fixe les versions de toutes les extensions Quarkus -->
             <dependency>
-                <groupId>${quarkus.platform.group-id}</groupId>
-                <artifactId>${quarkus.platform.artifact-id}</artifactId>
-                <version>${quarkus.platform.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
+                <groupId>jakarta.annotation</groupId>
+                <artifactId>jakarta.annotation-api</artifactId>
+                <version>${jakarta.annotation-api.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.jetbrains</groupId>
+                <artifactId>annotations</artifactId>
+                <version>${jetbrains-annotations.version}</version>
             </dependency>
 
             <!-- Modules internes -->
@@ -72,51 +71,9 @@
         <pluginManagement>
             <plugins>
                 <plugin>
-                    <groupId>${quarkus.platform.group-id}</groupId>
-                    <artifactId>quarkus-maven-plugin</artifactId>
-                    <version>${quarkus.platform.version}</version>
-                    <extensions>true</extensions>
-                    <executions>
-                        <execution>
-                            <goals>
-                                <goal>build</goal>
-                                <goal>generate-code</goal>
-                                <goal>generate-code-tests</goal>
-                            </goals>
-                        </execution>
-                    </executions>
-                </plugin>
-                <plugin>
-                    <!-- Génère META-INF/jandex.idx : permet à Quarkus de découvrir les beans CDI d'une lib -->
-                    <groupId>io.smallrye</groupId>
-                    <artifactId>jandex-maven-plugin</artifactId>
-                    <version>${jandex-plugin.version}</version>
-                    <executions>
-                        <execution>
-                            <id>make-index</id>
-                            <goals>
-                                <goal>jandex</goal>
-                            </goals>
-                        </execution>
-                    </executions>
-                </plugin>
-                <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-compiler-plugin</artifactId>
                     <version>${compiler-plugin.version}</version>
-                    <configuration>
-                        <parameters>true</parameters>
-                    </configuration>
-                </plugin>
-                <plugin>
-                    <groupId>org.apache.maven.plugins</groupId>
-                    <artifactId>maven-surefire-plugin</artifactId>
-                    <version>${surefire-plugin.version}</version>
-                    <configuration>
-                        <systemPropertyVariables>
-                            <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
-                        </systemPropertyVariables>
-                    </configuration>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
@@ -135,5 +92,30 @@
                 </plugin>
             </plugins>
         </pluginManagement>
+
+        <plugins>
+            <!-- Impose Maven 3.10.0+ (utiliser ./mvnw, qui télécharge la bonne version) -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>${enforcer-plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>enforce-maven</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <requireMavenVersion>
+                                    <version>[3.10.0,)</version>
+                                    <message>Ce projet requiert Maven 3.10.0+ : utilisez ./mvnw (ou mvnw.cmd sous Windows).</message>
+                                </requireMavenVersion>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
     </build>
 </project>

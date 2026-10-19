@@ -4,12 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <!--
-        Librairie métier utilisée par le serveur Quarkus.
-        - Bean CDI (GreetingService) : l'API CDI est "provided", fournie par Quarkus au runtime.
-        - L'index Jandex (META-INF/jandex.idx) permet à Quarkus de découvrir ce bean
-          alors qu'il est dans un jar externe à l'application.
-    -->
+    <!-- Librairie Java simple, avec deux dépendances (qui n'ont elles-mêmes aucune dépendance) -->
     <parent>
         <groupId>fr.antschw.lambda</groupId>
         <artifactId>lambda-parent</artifactId>
@@ -20,19 +15,15 @@
     <name>Lambda :: Lib</name>
 
     <dependencies>
+        <!-- Sera EMBARQUÉE dans le jar shadé -->
         <dependency>
-            <groupId>jakarta.enterprise</groupId>
-            <artifactId>jakarta.enterprise.cdi-api</artifactId>
-            <scope>provided</scope>
+            <groupId>jakarta.annotation</groupId>
+            <artifactId>jakarta.annotation-api</artifactId>
+        </dependency>
+        <!-- Sera PROMUE : reste un jar séparé, déclaré dans le pom réduit de lambda-shade -->
+        <dependency>
+            <groupId>org.jetbrains</groupId>
+            <artifactId>annotations</artifactId>
         </dependency>
     </dependencies>
-
-    <build>
-        <plugins>
-            <plugin>
-                <groupId>io.smallrye</groupId>
-                <artifactId>jandex-maven-plugin</artifactId>
-            </plugin>
-        </plugins>
-    </build>
 </project>
