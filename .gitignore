@@ -1,0 +1,9 @@
+target/
+dependency-reduced-pom.xml
+*.iml
+.idea/
+.vscode/
+.classpath
+.project
+.settings/
+.DS_Store

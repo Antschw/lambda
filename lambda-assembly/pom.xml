@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+        Module final : construit le zip de livraison.
+
+        Le principe : le descripteur d'assembly (src/main/assembly/zip.xml) copie dans lib/
+        les dépendances DIRECTES de ce module. Les profils Maven ne changent qu'une chose :
+        la dépendance déclarée.
+          - profil dev  (actif par défaut) : dépendance vers "lambda"
+          - profil prod (-Pprod)           : dépendance vers "lambda-shade"
+    -->
+    <parent>
+        <groupId>fr.antschw.lambda</groupId>
+        <artifactId>lambda-parent</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>lambda-assembly</artifactId>
+    <!-- packaging pom : ce module ne produit pas de jar, seulement le zip -->
+    <packaging>pom</packaging>
+    <name>Lambda :: Assembly</name>
+
+    <profiles>
+        <profile>
+            <id>dev</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <properties>
+                <env>dev</env>
+            </properties>
+            <dependencies>
+                <dependency>
+                    <groupId>${project.groupId}</groupId>
+                    <artifactId>lambda</artifactId>
+                </dependency>
+            </dependencies>
+        </profile>
+        <profile>
+            <id>prod</id>
+            <properties>
+                <env>prod</env>
+            </properties>
+            <dependencies>
+                <dependency>
+                    <groupId>${project.groupId}</groupId>
+                    <artifactId>lambda-shade</artifactId>
+                </dependency>
+            </dependencies>
+        </profile>
+    </profiles>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>make-zip</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                        <configuration>
+                            <descriptors>
+                                <descriptor>src/main/assembly/zip.xml</descriptor>
+                            </descriptors>
+                            <!-- target/lambda-assembly-1.0.0-SNAPSHOT-dev.zip ou -prod.zip -->
+                            <finalName>${project.artifactId}-${project.version}-${env}</finalName>
+                            <appendAssemblyId>false</appendAssemblyId>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
