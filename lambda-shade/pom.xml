@@ -8,6 +8,8 @@
         Reprend le module "lambda" et le fusionne avec toutes ses dépendances
         dans un seul jar (maven-shade-plugin).
 
+        META-INF/jandex.idx de "lambda" est conservé : le bean CDI reste découvert par Quarkus.
+
         Le "dependency-reduced-pom" est le pom publié pour ce module :
         toutes les dépendances déjà incluses dans le jar en sont retirées,
         donc un consommateur de lambda-shade ne récupère AUCUNE dépendance transitive.
@@ -65,21 +67,12 @@
                                         <exclude>META-INF/MANIFEST.MF</exclude>
                                         <exclude>module-info.class</exclude>
                                         <exclude>META-INF/versions/*/module-info.class</exclude>
-                                        <!-- Métadonnées présentes dans chaque extension Quarkus (doublons inutiles ici) -->
-                                        <exclude>META-INF/jandex.idx</exclude>
-                                        <exclude>META-INF/quarkus-*</exclude>
-                                        <exclude>META-INF/quarkus-config-doc/**</exclude>
                                     </excludes>
                                 </filter>
                             </filters>
                             <transformers>
                                 <!-- Fusionne les fichiers META-INF/services/* (ServiceLoader) -->
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
-                                <!-- Fusionne les LICENSE / NOTICE des différents jars -->
-                                <transformer implementation="org.apache.maven.plugins.shade.resource.ApacheLicenseResourceTransformer"/>
-                                <transformer implementation="org.apache.maven.plugins.shade.resource.ApacheNoticeResourceTransformer">
-                                    <addHeader>false</addHeader>
-                                </transformer>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer"/>
                             </transformers>
                         </configuration>

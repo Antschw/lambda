@@ -5,13 +5,15 @@
     <modelVersion>4.0.0</modelVersion>
 
     <!--
-        Module final : construit le zip de livraison.
+        Module final : serveur Quarkus (tuto officiel "Getting Started") + zip de livraison.
 
-        Le principe : le descripteur d'assembly (src/main/assembly/zip.xml) copie dans lib/
-        les dépendances DIRECTES de ce module. Les profils Maven ne changent qu'une chose :
-        la dépendance déclarée.
-          - profil dev  (actif par défaut) : dépendance vers "lambda"
-          - profil prod (-Pprod)           : dépendance vers "lambda-shade"
+        1. quarkus-maven-plugin construit l'application dans target/quarkus-app/
+           (layout fast-jar : quarkus-run.jar, app/, lib/boot/, lib/main/, quarkus/).
+        2. maven-assembly-plugin zippe ce dossier + src/main/dist (scripts de démarrage).
+
+        Le zip a toujours le même nom. Seul le profil change la lib embarquée dans lib/main/ :
+          - dev  (actif par défaut) : "lambda"       (jar non shadé)
+          - prod (-Pprod)           : "lambda-shade" (jar shadé)
     -->
     <parent>
         <groupId>fr.antschw.lambda</groupId>
@@ -20,9 +22,29 @@
     </parent>
 
     <artifactId>lambda-assembly</artifactId>
-    <!-- packaging pom : ce module ne produit pas de jar, seulement le zip -->
-    <packaging>pom</packaging>
-    <name>Lambda :: Assembly</name>
+    <name>Lambda :: Assembly (serveur Quarkus)</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-rest</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-arc</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-junit</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.rest-assured</groupId>
+            <artifactId>rest-assured</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
 
     <profiles>
         <profile>
@@ -30,9 +52,6 @@
             <activation>
                 <activeByDefault>true</activeByDefault>
             </activation>
-            <properties>
-                <env>dev</env>
-            </properties>
             <dependencies>
                 <dependency>
                     <groupId>${project.groupId}</groupId>
@@ -42,13 +61,21 @@
         </profile>
         <profile>
             <id>prod</id>
-            <properties>
-                <env>prod</env>
-            </properties>
             <dependencies>
                 <dependency>
                     <groupId>${project.groupId}</groupId>
                     <artifactId>lambda-shade</artifactId>
+                    <!--
+                        Le jar shadé contient déjà "lambda". Dans un build multi-modules, Maven lit le
+                        pom.xml d'origine de lambda-shade (pas le dependency-reduced-pom) : sans cette
+                        exclusion, "lambda" serait aussi embarqué en plus du jar shadé.
+                    -->
+                    <exclusions>
+                        <exclusion>
+                            <groupId>*</groupId>
+                            <artifactId>*</artifactId>
+                        </exclusion>
+                    </exclusions>
                 </dependency>
             </dependencies>
         </profile>
@@ -56,6 +83,19 @@
 
     <build>
         <plugins>
+            <!-- Déclaré AVANT l'assembly : les deux s'exécutent en phase package, dans cet ordre -->
+            <plugin>
+                <groupId>${quarkus.platform.group-id}</groupId>
+                <artifactId>quarkus-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-assembly-plugin</artifactId>
@@ -70,8 +110,8 @@
                             <descriptors>
                                 <descriptor>src/main/assembly/zip.xml</descriptor>
                             </descriptors>
-                            <!-- target/lambda-assembly-1.0.0-SNAPSHOT-dev.zip ou -prod.zip -->
-                            <finalName>${project.artifactId}-${project.version}-${env}</finalName>
+                            <!-- Même nom en dev et en prod : target/lambda-assembly-1.0.0-SNAPSHOT.zip -->
+                            <finalName>${project.artifactId}-${project.version}</finalName>
                             <appendAssemblyId>false</appendAssemblyId>
                         </configuration>
                     </execution>

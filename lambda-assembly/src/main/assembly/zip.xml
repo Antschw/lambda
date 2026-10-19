@@ -2,33 +2,42 @@
 <assembly xmlns="http://maven.apache.org/ASSEMBLY/2.2.0"
           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
           xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.2.0 https://maven.apache.org/xsd/assembly-2.2.0.xsd">
-    <id>zip</id>
+    <id>dist</id>
     <formats>
         <format>zip</format>
     </formats>
-    <!-- Le contenu est rangé dans un dossier racine lambda-assembly-<version>-<env>/ -->
+    <!-- Contenu rangé dans un dossier racine lambda-assembly-<version>/ -->
     <includeBaseDirectory>true</includeBaseDirectory>
 
     <fileSets>
-        <!-- Fichiers statiques de la distribution (README, conf, scripts...) -->
+        <!--
+            L'application construite par Quarkus (layout fast-jar standard).
+            La lib du profil actif se trouve dans lib/main/ :
+              dev  -> fr.antschw.lambda.lambda-<version>.jar
+              prod -> fr.antschw.lambda.lambda-shade-<version>.jar
+        -->
         <fileSet>
-            <directory>src/main/dist</directory>
+            <directory>${project.build.directory}/quarkus-app</directory>
             <outputDirectory>/</outputDirectory>
-            <filtered>true</filtered>
+        </fileSet>
+
+        <!-- Scripts de démarrage (exécutables, fins de ligne unix) -->
+        <fileSet>
+            <directory>src/main/dist/bin</directory>
+            <outputDirectory>bin</outputDirectory>
+            <includes>
+                <include>*.sh</include>
+            </includes>
+            <fileMode>0755</fileMode>
+            <lineEnding>unix</lineEnding>
+        </fileSet>
+        <fileSet>
+            <directory>src/main/dist/bin</directory>
+            <outputDirectory>bin</outputDirectory>
+            <includes>
+                <include>*.bat</include>
+            </includes>
+            <lineEnding>dos</lineEnding>
         </fileSet>
     </fileSets>
-
-    <dependencySets>
-        <!--
-            Copie dans lib/ uniquement la dépendance directe du profil actif :
-              dev  -> lambda-<version>.jar
-              prod -> lambda-shade-<version>.jar
-        -->
-        <dependencySet>
-            <outputDirectory>lib</outputDirectory>
-            <useProjectArtifact>false</useProjectArtifact>
-            <useTransitiveDependencies>false</useTransitiveDependencies>
-            <outputFileNameMapping>${artifact.artifactId}-${artifact.version}.${artifact.extension}</outputFileNameMapping>
-        </dependencySet>
-    </dependencySets>
 </assembly>

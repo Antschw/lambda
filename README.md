@@ -1,98 +1,107 @@
-# Lambda Quarkus – build multi-modules + zip d'assembly
+# Quarkus – build multi-modules + dist zip (lib shadée ou non selon le profil)
 
-Projet Maven multi-modules qui produit un zip de livraison. Le contenu de `lib/`
-dans le zip dépend du profil Maven :
+Projet Maven multi-modules qui produit **un zip exécutable** contenant un serveur
+Quarkus REST (tuto officiel *Getting Started*, Java 21). Le zip a **toujours le
+même nom** : `lambda-assembly/target/lambda-assembly-1.0.0-SNAPSHOT.zip`.
+Seule la lib embarquée change selon le profil :
 
-| Profil              | Contenu de `lib/`                  |
-|---------------------|------------------------------------|
-| `dev` (par défaut)  | `lambda-1.0.0-SNAPSHOT.jar`        |
-| `prod` (`-Pprod`)   | `lambda-shade-1.0.0-SNAPSHOT.jar`  |
+| Profil              | Lib dans `lib/main/`                                  |
+|---------------------|-------------------------------------------------------|
+| `dev` (par défaut)  | `fr.antschw.lambda.lambda-1.0.0-SNAPSHOT.jar` (non shadé) |
+| `prod` (`-Pprod`)   | `fr.antschw.lambda.lambda-shade-1.0.0-SNAPSHOT.jar` (shadé) |
+
+Le comportement du serveur est identique dans les deux cas.
 
 ## Modules
 
 ```
-pom.xml            lambda-parent   : orchestre le build (<modules>), BOM Quarkus, versions des plugins
-lambda/            lambda          : application Quarkus (extension quarkus-amazon-lambda)
-lambda-shade/      lambda-shade    : reprend lambda + ses dépendances dans un seul jar (maven-shade-plugin)
-lambda-assembly/   lambda-assembly : construit le zip (maven-assembly-plugin)
+pom.xml            lambda-parent   : orchestre le build (<modules>), BOM Quarkus 3.40.1, versions des plugins
+lambda/            lambda          : lib CDI (GreetingService) + index Jandex
+lambda-shade/      lambda-shade    : reprend lambda dans un jar shadé + dependency-reduced-pom
+lambda-assembly/   lambda-assembly : serveur Quarkus REST (GreetingResource) + zip (maven-assembly-plugin)
 ```
 
-### `lambda`
-Une lambda Quarkus minimale : `GreetingLambda` (handler `@Named("greeting")`,
-déclaré dans `application.properties` via `quarkus.lambda.handler`) qui utilise
-`GreetingService` injecté par CDI.
+### `lambda` – la lib
+- `GreetingService` est un bean CDI `@ApplicationScoped`.
+- L'API CDI est en scope `provided` : Quarkus la fournit au runtime, elle n'est donc
+  jamais embarquée (ni dans la lib, ni dans le jar shadé).
+- `jandex-maven-plugin` génère `META-INF/jandex.idx` : c'est ce qui permet à Quarkus
+  de découvrir le bean alors qu'il est dans un jar externe à l'application.
 
-### `lambda-shade`
-Aucune source. Une seule dépendance : `lambda`. Le `maven-shade-plugin` :
-- fusionne `lambda` et toutes ses dépendances dans `lambda-shade-1.0.0-SNAPSHOT.jar`
-  (`shadedArtifactAttached=false` : le jar shadé remplace l'artefact principal) ;
-- génère un **dependency-reduced-pom** (`createDependencyReducedPom=true`) : c'est
-  ce pom qui est installé/publié, sans les dépendances déjà embarquées. Un projet
-  qui dépend de `lambda-shade` ne récupère donc aucune dépendance transitive.
+### `lambda-shade` – la lib shadée
+- Aucune source, une seule dépendance : `lambda`.
+- `maven-shade-plugin` fusionne `lambda` (et ses éventuelles dépendances) dans
+  `lambda-shade-1.0.0-SNAPSHOT.jar`, qui remplace l'artefact principal
+  (`shadedArtifactAttached=false`). L'index Jandex de `lambda` est conservé.
+- `createDependencyReducedPom=true` : le pom installé/publié ne déclare plus les
+  dépendances déjà embarquées.
 
-### `lambda-assembly`
-Packaging `pom` : il ne produit que le zip. Le descripteur
-`src/main/assembly/zip.xml` est **unique** : il copie dans `lib/` les dépendances
-**directes** du module (`useTransitiveDependencies=false`).
-
-Ce sont les profils du `pom.xml` de ce module qui choisissent la dépendance :
+### `lambda-assembly` – le serveur et le zip
+- Application Quarkus standard : `quarkus-rest`, `quarkus-arc`, tests `@QuarkusTest`.
+- `GreetingResource` injecte le `GreetingService` de la lib :
+  - `GET /hello` → `Hello from Quarkus REST`
+  - `GET /hello/greeting/{name}` → `hello {name}`
+- En phase `package` : `quarkus-maven-plugin` construit `target/quarkus-app/`
+  (layout fast-jar), puis `maven-assembly-plugin` le zippe avec `bin/start.sh` /
+  `bin/start.bat` (descripteur `src/main/assembly/zip.xml`).
+- **Les profils ne changent que la dépendance vers la lib** :
 
 ```xml
 <profile>
     <id>dev</id>
     <activation><activeByDefault>true</activeByDefault></activation>
-    <properties><env>dev</env></properties>
     <dependencies>
         <dependency><groupId>${project.groupId}</groupId><artifactId>lambda</artifactId></dependency>
     </dependencies>
 </profile>
 <profile>
     <id>prod</id>
-    <properties><env>prod</env></properties>
     <dependencies>
-        <dependency><groupId>${project.groupId}</groupId><artifactId>lambda-shade</artifactId></dependency>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>lambda-shade</artifactId>
+            <exclusions>
+                <exclusion><groupId>*</groupId><artifactId>*</artifactId></exclusion>
+            </exclusions>
+        </dependency>
     </dependencies>
 </profile>
 ```
 
-`src/main/dist/` est copié à la racine du zip (avec filtrage des propriétés Maven) :
-c'est là qu'on ajoute la configuration ou les scripts de la distribution.
+> Pourquoi l'exclusion `*:*` en prod ? Dans un build multi-modules, Maven lit le
+> `pom.xml` d'origine de `lambda-shade` et non son dependency-reduced-pom. Sans
+> l'exclusion, `lambda` serait embarqué **en plus** du jar shadé (vérifié).
 
 ## Build
 
 Prérequis : Java 21, Maven 3.9+.
 
 ```bash
-# dev (profil par défaut)
-mvn clean package
-unzip -l lambda-assembly/target/lambda-assembly-1.0.0-SNAPSHOT-dev.zip
-
-# prod
-mvn clean package -Pprod
-unzip -l lambda-assembly/target/lambda-assembly-1.0.0-SNAPSHOT-prod.zip
+mvn clean package          # dev  : lib non shadée
+mvn clean package -Pprod   # prod : lib shadée
 ```
 
-Contenu du zip en dev :
+## Lancer la dist
 
-```
-lambda-assembly-1.0.0-SNAPSHOT-dev/
-├── README.txt
-└── lib/
-    └── lambda-1.0.0-SNAPSHOT.jar
-```
-
-Contenu du zip en prod :
-
-```
-lambda-assembly-1.0.0-SNAPSHOT-prod/
-├── README.txt
-└── lib/
-    └── lambda-shade-1.0.0-SNAPSHOT.jar
+```bash
+unzip lambda-assembly/target/lambda-assembly-1.0.0-SNAPSHOT.zip
+./lambda-assembly-1.0.0-SNAPSHOT/bin/start.sh          # Windows : bin\start.bat
+curl localhost:8080/hello/greeting/antoine              # -> hello antoine
 ```
 
-> Remarque : le warning `JAR will be empty` sur `lambda-shade` est normal, le
-> module n'a pas de sources ; son jar est ensuite remplacé par le jar shadé.
->
-> Le jar shadé sert ici à illustrer la structure : une application Quarkus a
-> besoin de l'étape de build Quarkus (dossier `quarkus-app/` ou `function.zip`
-> dans `lambda/target/`) pour démarrer réellement sur AWS Lambda.
+Le port se change avec `-Dquarkus.http.port=9090` (passé à `start.sh`) ou via `JAVA_OPTS`.
+
+Contenu du zip :
+
+```
+lambda-assembly-1.0.0-SNAPSHOT/
+├── bin/start.sh, bin/start.bat
+├── quarkus-run.jar
+├── app/lambda-assembly-1.0.0-SNAPSHOT.jar
+├── lib/boot/...
+├── lib/main/...   (Quarkus + lambda OU lambda-shade selon le profil)
+└── quarkus/...
+```
+
+> Le warning `JAR will be empty` sur `lambda-shade` est normal : le module n'a pas
+> de sources, son jar est ensuite remplacé par le jar shadé.
