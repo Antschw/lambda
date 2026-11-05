@@ -7,5 +7,15 @@
 
 header {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
+}
+
+header nav {
+  display: flex;
+  gap: 1rem;
+}
+
+.active {
+  font-weight: bold;
 }

@@ -1,9 +1,22 @@
-<header>
+<header *transloco="let t">
+  <nav [aria-label]="t('nav.label')">
+    <a
+      [routerLink]="['/', activeLang()]"
+      routerLinkActive="active"
+      [routerLinkActiveOptions]="{ exact: true }"
+      ariaCurrentWhenActive="page"
+      >{{ t('nav.home') }}</a
+    >
+    <a
+      [routerLink]="['/', activeLang(), 'about']"
+      routerLinkActive="active"
+      ariaCurrentWhenActive="page"
+      >{{ t('nav.about') }}</a
+    >
+  </nav>
   <app-language-switcher />
 </header>
 
-<main *transloco="let t">
-  <h1>{{ t('title') }}</h1>
-  <p>{{ t('greeting', { name }) }}</p>
-  <p>{{ t('description') }}</p>
+<main>
+  <router-outlet />
 </main>

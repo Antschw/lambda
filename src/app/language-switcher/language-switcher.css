@@ -3,7 +3,7 @@ nav {
   gap: 0.5rem;
 }
 
-button {
+a {
   padding: 0.25rem 0.75rem;
   border: 1px solid currentColor;
   border-radius: 0.25rem;
@@ -11,10 +11,10 @@ button {
   color: inherit;
   font: inherit;
   text-transform: uppercase;
-  cursor: pointer;
+  text-decoration: none;
 }
 
-button[aria-pressed='true'] {
+a[aria-current='true'] {
   background: #1976d2;
   border-color: #1976d2;
   color: #fff;

@@ -1,20 +1,21 @@
 import { ChangeDetectionStrategy, Component, DOCUMENT, effect, inject } from '@angular/core';
+import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { TranslocoDirective, TranslocoService } from '@jsverse/transloco';
 
 import { LanguageSwitcher } from './language-switcher/language-switcher';
 
 @Component({
   selector: 'app-root',
-  imports: [TranslocoDirective, LanguageSwitcher],
+  imports: [RouterOutlet, RouterLink, RouterLinkActive, TranslocoDirective, LanguageSwitcher],
   templateUrl: './app.html',
   styleUrl: './app.css',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class App {
   private readonly document = inject(DOCUMENT);
-  private readonly activeLang = inject(TranslocoService).activeLang;
 
-  protected readonly name = 'Angular';
+  /** Langue active, mise à jour par le resolver de la route `:lang`. */
+  protected readonly activeLang = inject(TranslocoService).activeLang;
 
   constructor() {
     // Garde <html lang="..."> synchronisé avec la langue active (accessibilité, SEO).

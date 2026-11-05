@@ -1,7 +1,18 @@
 {
-  "title": "Démo Transloco",
-  "greeting": "Bonjour {{ name }} !",
-  "description": "Cette page est traduite avec Transloco.",
+  "nav": {
+    "label": "Navigation principale",
+    "home": "Accueil",
+    "about": "À propos"
+  },
+  "home": {
+    "title": "Démo Transloco",
+    "greeting": "Bonjour {{ name }} !",
+    "description": "La langue fait partie de l'URL : /en/… ou /fr/…"
+  },
+  "about": {
+    "title": "À propos",
+    "description": "Changez de langue depuis cette page : l'URL devient /en/about et vous restez sur la même page."
+  },
   "languageSwitcher": {
     "label": "Langue"
   }
