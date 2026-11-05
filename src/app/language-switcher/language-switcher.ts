@@ -1,13 +1,14 @@
-import { Component, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 import { TranslocoDirective, TranslocoService } from '@jsverse/transloco';
 
-import { AVAILABLE_LANGS, Lang } from '../i18n/transloco-config';
+import { AVAILABLE_LANGS, Lang } from '../i18n/i18n.config';
 
 @Component({
   selector: 'app-language-switcher',
   imports: [TranslocoDirective],
   templateUrl: './language-switcher.html',
   styleUrl: './language-switcher.css',
+  changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class LanguageSwitcher {
   private readonly transloco = inject(TranslocoService);

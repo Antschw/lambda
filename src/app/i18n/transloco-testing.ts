@@ -2,7 +2,7 @@ import { TranslocoTestingModule, TranslocoTestingOptions } from '@jsverse/transl
 
 import en from '../../../public/i18n/en.json';
 import fr from '../../../public/i18n/fr.json';
-import { appTranslocoConfig } from './transloco-config';
+import { appTranslocoConfig } from './i18n.config';
 
 /**
  * Module Transloco pour les tests unitaires : les vraies traductions sont

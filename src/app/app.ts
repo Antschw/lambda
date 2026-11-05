@@ -1,4 +1,4 @@
-import { Component, DOCUMENT, effect, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DOCUMENT, effect, inject } from '@angular/core';
 import { TranslocoDirective, TranslocoService } from '@jsverse/transloco';
 
 import { LanguageSwitcher } from './language-switcher/language-switcher';
@@ -8,6 +8,7 @@ import { LanguageSwitcher } from './language-switcher/language-switcher';
   imports: [TranslocoDirective, LanguageSwitcher],
   templateUrl: './app.html',
   styleUrl: './app.css',
+  changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class App {
   private readonly document = inject(DOCUMENT);
