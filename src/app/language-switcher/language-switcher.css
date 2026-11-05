@@ -1,0 +1,21 @@
+nav {
+  display: flex;
+  gap: 0.5rem;
+}
+
+button {
+  padding: 0.25rem 0.75rem;
+  border: 1px solid currentColor;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+button[aria-pressed='true'] {
+  background: #1976d2;
+  border-color: #1976d2;
+  color: #fff;
+}

@@ -1,0 +1,8 @@
+{
+  "title": "Transloco demo",
+  "greeting": "Hello {{ name }}!",
+  "description": "This page is translated with Transloco.",
+  "languageSwitcher": {
+    "label": "Language"
+  }
+}

@@ -1,0 +1,9 @@
+<header>
+  <app-language-switcher />
+</header>
+
+<main *transloco="let t">
+  <h1>{{ t('title') }}</h1>
+  <p>{{ t('greeting', { name }) }}</p>
+  <p>{{ t('description') }}</p>
+</main>

@@ -1,0 +1,7 @@
+<nav *transloco="let t" [aria-label]="t('languageSwitcher.label')">
+  @for (lang of langs; track lang) {
+    <button type="button" [aria-pressed]="lang === activeLang()" (click)="changeLang(lang)">
+      {{ lang }}
+    </button>
+  }
+</nav>
