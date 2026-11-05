@@ -6,15 +6,16 @@ TypeScript. Le code de ce dépôt est le résultat final : chaque étape renvoie
 
 **Versions utilisées**
 
-| Outil      | Version                                     |
-| ---------- | ------------------------------------------- |
-| Angular    | 22.2 (`latest` sur npm)                     |
-| Transloco  | 8.4 (`@jsverse/transloco`, dernière stable) |
-| TypeScript | 6.0                                         |
-| Node.js    | `^22.22.3`, `^24.15.0` ou `>=26`            |
+| Outil      | Version                                                 |
+| ---------- | ------------------------------------------------------- |
+| Angular    | 21.2 — **LTS** (tag npm `v21-lts`)                      |
+| Transloco  | 8.4 (`@jsverse/transloco`, dernière stable)             |
+| TypeScript | 5.9                                                     |
+| Node.js    | `^20.19.0`, `^22.12.0` ou `>=24` (exigé par Angular 21) |
 
-> **Et Angular 21 ?** La 21 est aujourd'hui en phase LTS, la 22 est la version stable courante.
-> Le code de ce tutoriel fonctionne tel quel avec les deux versions.
+> **Pourquoi Angular 21 ?** C'est la version LTS la plus récente (support jusqu'en mai 2027). La 22
+> est la version stable courante, mais pas encore en LTS. Le code de ce tutoriel est déjà prêt
+> pour la 22 : voir les remarques sur `withFetch()` et `OnPush` plus bas.
 
 ---
 
@@ -37,19 +38,26 @@ TypeScript. Le code de ce dépôt est le résultat final : chaque étape renvoie
 
 ## 1. Créer le projet
 
+On épingle la version majeure de la CLI pour rester sur la LTS :
+
 ```bash
-npx @angular/cli@latest new transloco-demo --style=css --ssr=false
+npx @angular/cli@21 new transloco-demo --style=css --ssr=false
 ```
 
-Un projet Angular 22 est, par défaut :
+Un projet Angular 21 est, par défaut :
 
 - **standalone** (plus de `NgModule`) ;
 - **zoneless** (pas de `zone.js`, la détection de changements repose sur les signals) ;
-- en **`OnPush`** par défaut pour tous les composants ;
-- en TypeScript **strict** (activé par défaut depuis TypeScript 6) ;
+- en TypeScript **strict** (`strict` et `strictTemplates` dans `tsconfig.json`) ;
 - testé avec **Vitest**.
 
-Transloco s'intègre sans configuration particulière dans ce contexte.
+En revanche, la stratégie de détection de changements par défaut est encore `Default` : on déclare
+donc `OnPush` sur chaque composant (voir [§7](#7-traduire-dans-un-template)).
+
+> **Si `npm install` échoue** avec `Cannot read properties of null (reading 'edgesOut')` : c'est un
+> bug de npm 10.9 rencontré lors de la génération de ce projet. Relancez l'installation avec
+> npm 11 (`npx npm@11 install`). Une fois le `package-lock.json` créé, `npm install` et `npm ci`
+> fonctionnent avec npm 10.
 
 ## 2. Installer Transloco
 
@@ -61,18 +69,28 @@ Le schematic :
 
 - ajoute `@jsverse/transloco` aux dépendances ;
 - crée `public/i18n/en.json` et `public/i18n/fr.json` ;
-- crée un loader HTTP ;
-- ajoute `provideHttpClient()` et `provideTransloco(...)` dans `app.config.ts` ;
-- crée un `transloco.config.ts` à la racine.
+- crée un loader HTTP dans `src/app/transloco-loader.ts` ;
+- ajoute `provideHttpClient()` et `provideTransloco(...)` dans `src/app/app.config.ts` ;
+- crée un fichier `transloco.config.ts` **à la racine du projet**.
 
 On part de ce résultat, puis on l'ajuste :
 
-| Généré par le schematic            | Ce qu'on fait ici                                    | Pourquoi                                                                                                                                                                |
-| ---------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `provideHttpClient()`              | **Supprimé**                                         | Depuis Angular 21, `HttpClient` est fourni à la racine par défaut et utilise `fetch`. `provideHttpClient()` ne sert plus qu'à ajouter des intercepteurs ou des options. |
-| Config inline dans `app.config.ts` | **Déplacée** dans `src/app/i18n/transloco-config.ts` | Elle est partagée avec les tests (voir [§10](#10-tester)).                                                                                                              |
-| `src/app/transloco-loader.ts`      | **Déplacé** dans `src/app/i18n/`                     | Tout ce qui concerne l'i18n est regroupé dans un dossier.                                                                                                               |
-| `transloco.config.ts`              | **Supprimé**                                         | Il ne sert qu'aux outils annexes (keys manager, scoped libs). À recréer si vous les utilisez (voir [§12](#12-aller-plus-loin)).                                         |
+| Généré par le schematic                       | Ce qu'on fait ici                                         | Pourquoi                                                                                                                                                                 |
+| --------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `provideHttpClient()`                         | **Complété** en `provideHttpClient(withFetch())`          | Le loader utilise `HttpClient`. `withFetch()` utilise l'API `fetch` plutôt que XHR : c'est recommandé par Angular et c'est le comportement par défaut à partir de la 22. |
+| Config inline dans `app.config.ts`            | **Déplacée** dans `src/app/i18n/i18n.config.ts` (étape 4) | Elle est partagée avec les tests (voir [§10](#10-tester)).                                                                                                               |
+| `src/app/transloco-loader.ts`                 | **Déplacé** dans `src/app/i18n/`                          | Tout ce qui concerne l'i18n est regroupé dans un dossier.                                                                                                                |
+| `transloco.config.ts` (à la racine du projet) | **Supprimé**                                              | Il n'est lu ni par Angular ni par Transloco à l'exécution : il sert uniquement aux outils en ligne de commande (voir l'encadré ci-dessous).                              |
+
+> **Deux fichiers à ne pas confondre**
+>
+> | Fichier                                  | Lu par                                                          | Dans ce projet |
+> | ---------------------------------------- | --------------------------------------------------------------- | -------------- |
+> | `transloco.config.ts` (racine du projet) | Les outils CLI : `@jsverse/transloco-keys-manager`, scoped libs | Supprimé       |
+> | `src/app/i18n/i18n.config.ts`            | L'application et les tests, via `provideTransloco()`            | Étape 4        |
+>
+> Le premier ne sert à rien tant qu'on n'utilise pas ces outils. Pour les ajouter plus tard, il
+> suffit de relancer `ng add` ou de recréer ce fichier (voir [§12](#12-aller-plus-loin)).
 
 ## 3. Écrire les fichiers de traduction
 
@@ -116,7 +134,10 @@ du build, donc `public/i18n/fr.json` est servi à l'URL `i18n/fr.json`.
 
 ## 4. Centraliser la configuration
 
-[`src/app/i18n/transloco-config.ts`](src/app/i18n/transloco-config.ts)
+On crée un fichier dédié à la configuration i18n de l'application. Son nom suit la convention de
+`app.config.ts` (et se distingue du `transloco.config.ts` des outils CLI, voir l'étape 2).
+
+[`src/app/i18n/i18n.config.ts`](src/app/i18n/i18n.config.ts)
 
 ```ts
 import { isDevMode } from '@angular/core';
@@ -191,15 +212,17 @@ export class TranslocoHttpLoader implements TranslocoLoader {
 [`src/app/app.config.ts`](src/app/app.config.ts)
 
 ```ts
+import { provideHttpClient, withFetch } from '@angular/common/http';
 import { ApplicationConfig, provideBrowserGlobalErrorListeners } from '@angular/core';
 import { provideTransloco } from '@jsverse/transloco';
 
-import { appTranslocoConfig } from './i18n/transloco-config';
+import { appTranslocoConfig } from './i18n/i18n.config';
 import { TranslocoHttpLoader } from './i18n/transloco-loader';
 
 export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
+    provideHttpClient(withFetch()),
     provideTransloco({
       config: appTranslocoConfig,
       loader: TranslocoHttpLoader,
@@ -208,8 +231,12 @@ export const appConfig: ApplicationConfig = {
 };
 ```
 
-`provideTransloco()` est l'API standalone. Il n'y a plus besoin de `TranslocoRootModule` (ancienne
-approche à base de `NgModule`).
+- `provideTransloco()` est l'API standalone. Il n'y a plus besoin de `TranslocoRootModule`
+  (ancienne approche à base de `NgModule`).
+- `provideHttpClient(withFetch())` : depuis Angular 21, `HttpClient` serait injectable sans cette
+  ligne, mais il utiliserait XHR. `withFetch()` aligne l'application sur le comportement d'Angular
+  22 ; lors de la montée de version, la ligne pourra être simplifiée (`withFetch()` y est déprécié
+  car devenu inutile).
 
 ## 7. Traduire dans un template
 
@@ -228,6 +255,7 @@ approche à base de `NgModule`).
 [`src/app/app.ts`](src/app/app.ts) (extrait)
 
 ```ts
+import { ChangeDetectionStrategy, Component } from '@angular/core';
 import { TranslocoDirective } from '@jsverse/transloco';
 
 @Component({
@@ -235,6 +263,7 @@ import { TranslocoDirective } from '@jsverse/transloco';
   imports: [TranslocoDirective, LanguageSwitcher],
   templateUrl: './app.html',
   styleUrl: './app.css',
+  changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class App {
   protected readonly name = 'Angular';
@@ -250,6 +279,9 @@ export class App {
   ce qu'il utilise.
 - `protected` : la propriété est accessible au template sans faire partie de l'API publique du
   composant.
+- `ChangeDetectionStrategy.OnPush` : recommandé par Angular, et devenu le défaut en Angular 22. Les
+  vues traduites se mettent bien à jour au changement de langue, Transloco notifiant Angular
+  lui-même.
 
 Option utile quand toutes les clés d'un bloc partagent un préfixe :
 
@@ -286,16 +318,17 @@ export class Example {
 [`src/app/language-switcher/language-switcher.ts`](src/app/language-switcher/language-switcher.ts)
 
 ```ts
-import { Component, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 import { TranslocoDirective, TranslocoService } from '@jsverse/transloco';
 
-import { AVAILABLE_LANGS, Lang } from '../i18n/transloco-config';
+import { AVAILABLE_LANGS, Lang } from '../i18n/i18n.config';
 
 @Component({
   selector: 'app-language-switcher',
   imports: [TranslocoDirective],
   templateUrl: './language-switcher.html',
   styleUrl: './language-switcher.css',
+  changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class LanguageSwitcher {
   private readonly transloco = inject(TranslocoService);
@@ -311,12 +344,13 @@ export class LanguageSwitcher {
 
 [`src/app/language-switcher/language-switcher.html`](src/app/language-switcher/language-switcher.html)
 
+<!-- prettier-ignore -->
 ```html
 <nav *transloco="let t" [aria-label]="t('languageSwitcher.label')">
   @for (lang of langs; track lang) {
-  <button type="button" [aria-pressed]="lang === activeLang()" (click)="changeLang(lang)">
-    {{ lang }}
-  </button>
+    <button type="button" [aria-pressed]="lang === activeLang()" (click)="changeLang(lang)">
+      {{ lang }}
+    </button>
   }
 </nav>
 ```
@@ -327,7 +361,7 @@ export class LanguageSwitcher {
   `reRenderOnLangChange: true`.
 - `changeLang(lang: Lang)` : le type empêche d'appeler la méthode avec une langue non supportée.
 - Syntaxe de template moderne : `@for` avec `track`, liaison directe `[aria-label]` /
-  `[aria-pressed]` (sans le préfixe `attr.`).
+  `[aria-pressed]` (sans le préfixe `attr.`, possible depuis Angular 20).
 - Accessibilité : `aria-pressed` indique la langue active aux lecteurs d'écran, et le libellé du
   `<nav>` est lui-même traduit.
 
@@ -369,7 +403,7 @@ import { TranslocoTestingModule, TranslocoTestingOptions } from '@jsverse/transl
 
 import en from '../../../public/i18n/en.json';
 import fr from '../../../public/i18n/fr.json';
-import { appTranslocoConfig } from './transloco-config';
+import { appTranslocoConfig } from './i18n.config';
 
 export function getTranslocoModule(options: TranslocoTestingOptions = {}) {
   return TranslocoTestingModule.forRoot({
@@ -416,10 +450,11 @@ npm test
 
 ## 11. Récapitulatif des bonnes pratiques
 
+- [x] Angular en version LTS, CLI épinglée sur la version majeure (`@angular/cli@21`).
 - [x] `provideTransloco()` (standalone), pas de `TranslocoRootModule`.
-- [x] Pas de `provideHttpClient()` superflu : `HttpClient` est fourni par défaut depuis Angular 21.
+- [x] `provideHttpClient(withFetch())` pour charger les traductions avec `fetch`.
 - [x] Langues déclarées une seule fois (`as const`) et type `Lang` dérivé.
-- [x] Configuration partagée entre l'application et les tests.
+- [x] Configuration partagée entre l'application et les tests (`i18n.config.ts`).
 - [x] Fichiers de traduction dans `public/i18n/`, chargés à la demande, via une URL relative.
 - [x] `reRenderOnLangChange: true` dès que la langue peut changer sans recharger la page.
 - [x] `prodMode: !isDevMode()` pour couper les logs en production.
@@ -427,6 +462,7 @@ npm test
       code.
 - [x] Pas de `TranslocoService.translate()` avant le chargement des traductions.
 - [x] Import ciblé (`TranslocoDirective`, `TranslocoPipe`) plutôt que `TranslocoModule`.
+- [x] Composants en `ChangeDetectionStrategy.OnPush`.
 - [x] `TranslocoService.activeLang` (signal) plutôt que des souscriptions manuelles.
 - [x] `<html lang>` synchronisé avec la langue active.
 - [x] Tests sur les vrais textes avec `TranslocoTestingModule`.
@@ -435,15 +471,15 @@ npm test
 
 Pour garder la démo minimale, les points suivants ne sont pas implémentés :
 
-| Besoin                                                         | Solution                                                                               |
-| -------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Afficher la traduction d'une autre langue quand une clé manque | Options `fallbackLang` et `missingHandler: { useFallbackTranslation: true }`           |
-| Retenir la langue choisie entre deux visites                   | `@jsverse/transloco-persist-lang`                                                      |
-| Détecter la langue du navigateur au démarrage                  | `getBrowserLang()` exporté par `@jsverse/transloco`                                    |
-| Charger les traductions par fonctionnalité (lazy loading)      | Les _scopes_ Transloco (`provideTranslocoScope()`)                                     |
-| Détecter les clés manquantes ou inutilisées                    | `@jsverse/transloco-keys-manager` (nécessite `transloco.config.ts`)                    |
-| Pluriels, genres (syntaxe ICU)                                 | `@jsverse/transloco-messageformat`                                                     |
-| Formater dates, nombres, devises selon la langue               | `@jsverse/transloco-locale`                                                            |
-| Rendu serveur (SSR)                                            | Le loader doit utiliser une URL absolue côté serveur (voir la documentation Transloco) |
+| Besoin                                                         | Solution                                                                                    |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Afficher la traduction d'une autre langue quand une clé manque | Options `fallbackLang` et `missingHandler: { useFallbackTranslation: true }`                |
+| Retenir la langue choisie entre deux visites                   | `@jsverse/transloco-persist-lang`                                                           |
+| Détecter la langue du navigateur au démarrage                  | `getBrowserLang()` exporté par `@jsverse/transloco`                                         |
+| Charger les traductions par fonctionnalité (lazy loading)      | Les _scopes_ Transloco (`provideTranslocoScope()`)                                          |
+| Détecter les clés manquantes ou inutilisées                    | `@jsverse/transloco-keys-manager` (nécessite le `transloco.config.ts` à la racine, étape 2) |
+| Pluriels, genres (syntaxe ICU)                                 | `@jsverse/transloco-messageformat`                                                          |
+| Formater dates, nombres, devises selon la langue               | `@jsverse/transloco-locale`                                                                 |
+| Rendu serveur (SSR)                                            | Le loader doit utiliser une URL absolue côté serveur (voir la documentation Transloco)      |
 
 Documentation officielle : <https://jsverse.gitbook.io/transloco>
