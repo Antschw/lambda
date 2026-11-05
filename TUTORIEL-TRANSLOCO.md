@@ -4,6 +4,10 @@ Ce tutoriel explique pas à pas comment internationaliser (i18n) une application
 [Transloco](https://jsverse.gitbook.io/transloco), en suivant les standards actuels d'Angular et de
 TypeScript. Le code de ce dépôt est le résultat final : chaque étape renvoie au fichier concerné.
 
+> **Sur la branche `example/transloco-url`**, le code est allé plus loin (langue dans l'URL) : les
+> extraits de ce tutoriel correspondent à la branche `example/transloco`. La suite est dans
+> [TUTORIEL-TRANSLOCO-URL.md](TUTORIEL-TRANSLOCO-URL.md).
+
 **Versions utilisées**
 
 | Outil      | Version                                                 |
