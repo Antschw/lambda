@@ -1,0 +1,20 @@
+<header>
+  <nav aria-label="Main navigation" i18n-aria-label="@@nav.label">
+    <a
+      routerLink="/"
+      routerLinkActive="active"
+      [routerLinkActiveOptions]="{ exact: true }"
+      ariaCurrentWhenActive="page"
+      i18n="@@nav.home"
+      >Home</a
+    >
+    <a routerLink="/about" routerLinkActive="active" ariaCurrentWhenActive="page" i18n="@@nav.about"
+      >About</a
+    >
+  </nav>
+  <app-language-switcher />
+</header>
+
+<main>
+  <router-outlet />
+</main>

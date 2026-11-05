@@ -1,0 +1,13 @@
+<!-- Liens <a href> classiques (pas routerLink) : changer de langue charge l'autre build. -->
+<nav aria-label="Language" i18n-aria-label="@@languageSwitcher.label">
+  @for (link of links(); track link.code) {
+    <a
+      [href]="link.href"
+      [hreflang]="link.code"
+      [lang]="link.code"
+      [aria-current]="link.code === currentLocale ? 'true' : null"
+    >
+      {{ link.label }}
+    </a>
+  }
+</nav>
