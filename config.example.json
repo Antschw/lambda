@@ -1,0 +1,50 @@
+{
+  "listen": {
+    "host": "${LLM_PROXY_HOST:-127.0.0.1}",
+    "port": "${LLM_PROXY_PORT:-4000}"
+  },
+  "localApiKeys": ["${LLM_PROXY_LOCAL_KEY:-}"],
+
+  "upstreams": [
+    {
+      "name": "provider-a",
+      "baseUrl": "https://api.provider-a.example/v1",
+      "apiKey": "${PROVIDER_A_API_KEY}"
+    },
+    {
+      "name": "provider-b",
+      "baseUrl": "https://api.provider-b.example/v1",
+      "apiKey": "${PROVIDER_B_API_KEY}",
+      "passthroughModels": ["provider-b-other-model"]
+    },
+    {
+      "name": "provider-c",
+      "baseUrl": "https://api.provider-c.example/v1",
+      "apiKey": "${PROVIDER_C_API_KEY}",
+      "maxRequestsPerMinute": 20
+    }
+  ],
+
+  "models": {
+    "coder": [
+      { "upstream": "provider-a", "model": "qwen3-coder" },
+      { "upstream": "provider-b", "model": "Qwen/Qwen3-Coder" },
+      { "upstream": "provider-b", "model": "Qwen/Qwen3-Coder-Fast" },
+      { "upstream": "provider-c", "model": "qwen3-coder-480b" }
+    ]
+  },
+  "defaultModel": "coder",
+
+  "retry": {
+    "maxAttempts": 6,
+    "defaultCooldown": "30s",
+    "maxCooldown": "5m",
+    "misconfiguredCooldown": "10m",
+    "maxWaitWhenAllCooling": "60s"
+  },
+  "timeouts": {
+    "connect": "10s",
+    "request": "10m",
+    "shutdown": "10s"
+  }
+}
