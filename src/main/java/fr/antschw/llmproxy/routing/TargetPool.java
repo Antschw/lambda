@@ -7,6 +7,10 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.TreeMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,14 +27,18 @@ import java.util.stream.Collectors;
  * <p>Targets of a route are used in round-robin order. A target is skipped while it is cooling
  * down (after a 429 or an error) or while its upstream's proactive request-per-minute window is
  * full. Health is tracked per target, so a target that appears in several virtual models shares
- * its cooldown across them. Thread-safe.
+ * its cooldown across them.
+ *
+ * <p>Passthrough routes (one per real model name, over every upstream exposing it) are rebuilt by
+ * {@link #updateModels(Map)} when model discovery runs; target health and round-robin positions
+ * survive these updates. Thread-safe.
  */
 public final class TargetPool {
 
     private final ProxyConfig config;
     private final Clock clock;
     private final Map<String, Route> virtualRoutes = new LinkedHashMap<>();
-    private final Map<String, Route> passthroughRoutes = new LinkedHashMap<>();
+    private volatile Map<String, Route> passthroughRoutes = Map.of();
     private final Map<String, TargetState> states = new ConcurrentHashMap<>();
     private final Map<String, RateWindow> windows = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> cursors = new ConcurrentHashMap<>();
@@ -48,19 +56,42 @@ public final class TargetPool {
         config.models().forEach((name, routes) -> virtualRoutes.put(name, new Route(name, true,
                 routes.stream().map(r -> new Target(upstreams.get(r.upstream()), r.model())).toList())));
 
-        Map<String, List<Target>> passthrough = new LinkedHashMap<>();
         for (Upstream upstream : config.upstreams()) {
-            for (String model : upstream.passthroughModels()) {
-                passthrough.computeIfAbsent(model, k -> new ArrayList<>()).add(new Target(upstream, model));
-            }
             upstream.maxRequestsPerMinute().ifPresent(rpm -> windows.put(upstream.name(), new RateWindow(rpm)));
         }
-        passthrough.forEach((model, targets) -> {
-            if (!virtualRoutes.containsKey(model)) {
-                passthroughRoutes.put(model, new Route(model, false, targets));
+        virtualRoutes.values().forEach(route -> route.targets()
+                .forEach(t -> states.computeIfAbsent(t.id(), k -> new TargetState())));
+        updateModels(Map.of());
+    }
+
+    /**
+     * Rebuilds passthrough routes from the configured {@code passthroughModels} plus the models
+     * discovered on each upstream. A model exposed by N upstreams gets a route over those N
+     * targets, in upstream declaration order. Virtual model names take precedence.
+     *
+     * @param discovered model ids by upstream name (upstreams missing from the map contribute only
+     *                   their configured passthrough models)
+     */
+    public synchronized void updateModels(Map<String, ? extends Collection<String>> discovered) {
+        Map<String, List<Target>> byModel = new TreeMap<>();
+        for (Upstream upstream : config.upstreams()) {
+            Set<String> models = new LinkedHashSet<>(upstream.passthroughModels());
+            Collection<String> found = discovered.get(upstream.name());
+            if (found != null) {
+                models.addAll(found);
             }
+            for (String model : models) {
+                if (!virtualRoutes.containsKey(model)) {
+                    byModel.computeIfAbsent(model, k -> new ArrayList<>()).add(new Target(upstream, model));
+                }
+            }
+        }
+        Map<String, Route> routes = new LinkedHashMap<>();
+        byModel.forEach((model, targets) -> {
+            targets.forEach(t -> states.computeIfAbsent(t.id(), k -> new TargetState()));
+            routes.put(model, new Route(model, false, List.copyOf(targets)));
         });
-        allRoutes().forEach(route -> route.targets().forEach(t -> states.computeIfAbsent(t.id(), k -> new TargetState())));
+        passthroughRoutes = Collections.unmodifiableMap(routes);
     }
 
     /**
@@ -173,7 +204,16 @@ public final class TargetPool {
         return cooldown;
     }
 
-    /** @return virtual and passthrough model names, virtual first */
+    /**
+     * @param model a model name served by the proxy
+     * @return names of the upstreams serving it, without duplicates, or an empty list
+     */
+    public List<String> upstreamsOf(String model) {
+        Route route = virtualRoutes.containsKey(model) ? virtualRoutes.get(model) : passthroughRoutes.get(model);
+        return route == null ? List.of() : route.upstreams();
+    }
+
+    /** @return virtual and passthrough model names, virtual first, passthrough sorted by name */
     public List<String> modelNames() {
         List<String> names = new ArrayList<>(virtualRoutes.keySet());
         names.addAll(passthroughRoutes.keySet());
@@ -210,6 +250,11 @@ public final class TargetPool {
      * @param targets targets in round-robin order
      */
     public record Route(String name, boolean virtual, List<Target> targets) {
+
+        /** @return names of the upstreams of this route, without duplicates, in route order */
+        public List<String> upstreams() {
+            return targets.stream().map(t -> t.upstream().name()).distinct().toList();
+        }
     }
 
     /** Result of {@link #acquire(Route)}. */

@@ -18,6 +18,7 @@ import java.util.Set;
  * @param defaultModel           virtual model used when a request has no or an unknown model, if any
  * @param retry                  failover and cooldown tuning
  * @param timeouts               network timeouts
+ * @param discovery              automatic model discovery tuning
  */
 public record ProxyConfig(
         Listen listen,
@@ -26,7 +27,8 @@ public record ProxyConfig(
         Map<String, List<ModelRoute>> models,
         Optional<String> defaultModel,
         Retry retry,
-        Timeouts timeouts) {
+        Timeouts timeouts,
+        Discovery discovery) {
 
     public ProxyConfig {
         Objects.requireNonNull(listen, "listen");
@@ -36,6 +38,7 @@ public record ProxyConfig(
         Objects.requireNonNull(defaultModel, "defaultModel");
         Objects.requireNonNull(retry, "retry");
         Objects.requireNonNull(timeouts, "timeouts");
+        Objects.requireNonNull(discovery, "discovery");
     }
 
     /**
@@ -54,8 +57,11 @@ public record ProxyConfig(
      * @param baseUrl              base URL including the API version, e.g. {@code https://api.example.com/v1}
      * @param apiKey               key sent as {@code Authorization: Bearer}
      * @param headers              extra headers sent with every request to this provider
-     * @param passthroughModels    real model names the client may request directly
+     * @param passthroughModels    real model names the client may request directly, always routed
      * @param maxRequestsPerMinute optional proactive limit, so the proxy avoids hitting the provider's 429
+     * @param discoverModels       whether to read the provider's model list from {@code GET {baseUrl}/models}
+     * @param includeModels        glob patterns a discovered model must match (empty means all)
+     * @param excludeModels        glob patterns of discovered models to ignore
      */
     public record Upstream(
             String name,
@@ -63,11 +69,16 @@ public record ProxyConfig(
             String apiKey,
             Map<String, String> headers,
             List<String> passthroughModels,
-            Optional<Integer> maxRequestsPerMinute) {
+            Optional<Integer> maxRequestsPerMinute,
+            boolean discoverModels,
+            List<String> includeModels,
+            List<String> excludeModels) {
 
         public Upstream {
             headers = Map.copyOf(headers);
             passthroughModels = List.copyOf(passthroughModels);
+            includeModels = List.copyOf(includeModels);
+            excludeModels = List.copyOf(excludeModels);
         }
 
         /** Never print the key. */
@@ -111,5 +122,14 @@ public record ProxyConfig(
      * @param shutdown grace period for in-flight requests on shutdown
      */
     public record Timeouts(Duration connect, Duration request, Duration shutdown) {
+    }
+
+    /**
+     * Automatic model discovery.
+     *
+     * @param refreshInterval how often model lists are read again; zero disables refreshes after startup
+     * @param timeout         time allowed for one provider to answer {@code GET /models}
+     */
+    public record Discovery(Duration refreshInterval, Duration timeout) {
     }
 }

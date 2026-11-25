@@ -38,6 +38,26 @@ class ConfigLoaderTest {
         assertThat(config.timeouts().request()).isEqualTo(Duration.ofMinutes(10));
         assertThat(config.upstreams().getFirst().apiKey()).isEqualTo("secret-a");
         assertThat(config.models().get("coder")).containsExactly(new ProxyConfig.ModelRoute("a", "real-model"));
+        assertThat(config.discovery().refreshInterval()).isEqualTo(Duration.ofHours(1));
+        assertThat(config.discovery().timeout()).isEqualTo(Duration.ofSeconds(10));
+        assertThat(config.upstreams().getFirst().discoverModels()).isTrue();
+        assertThat(config.upstreams().getFirst().excludeModels()).isEmpty();
+    }
+
+    @Test
+    void acceptsUpstreamsWithOnlyDiscoveryAndReadsFilters() {
+        ProxyConfig config = loader.parse("""
+                {
+                  "upstreams": [{"name": "a", "baseUrl": "https://a/v1", "apiKey": "k",
+                                 "includeModels": ["gpt-*"], "excludeModels": ["*mini", "${UNSET:-}"]}],
+                  "discovery": {"refreshInterval": "0", "timeout": "3s"}
+                }""");
+
+        assertThat(config.models()).isEmpty();
+        assertThat(config.upstreams().getFirst().includeModels()).containsExactly("gpt-*");
+        assertThat(config.upstreams().getFirst().excludeModels()).containsExactly("*mini");
+        assertThat(config.discovery().refreshInterval()).isZero();
+        assertThat(config.discovery().timeout()).isEqualTo(Duration.ofSeconds(3));
     }
 
     @Test
@@ -92,7 +112,8 @@ class ConfigLoaderTest {
                         "must start with http"),
                 Arguments.of("{\"upstreams\": [{\"name\": \"a\", \"baseUrl\": \"https://a/v1\", \"apiKey\": \"${MISSING}\"}]}",
                         "'MISSING' is not set"),
-                Arguments.of("{\"upstreams\": [" + upstream + "}]}", "at least one virtual model"),
+                Arguments.of("{\"upstreams\": [" + upstream + ", \"discoverModels\": false}]}", "No model to serve"),
+                Arguments.of("{\"upstreams\": [" + upstream + ", \"discoverModels\": \"maybe\"}]}", "true or false"),
                 Arguments.of("{\"upstreams\": [" + upstream + "}], \"models\": {\"m\": [{\"upstream\": \"x\", \"model\": \"y\"}]}}",
                         "unknown upstream 'x'"),
                 Arguments.of("{\"upstreams\": [" + upstream + "}, " + upstream + "}]}", "Duplicate upstream name"),

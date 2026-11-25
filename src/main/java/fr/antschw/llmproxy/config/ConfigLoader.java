@@ -101,8 +101,10 @@ public final class ConfigLoader {
         upstreams.forEach(u -> upstreamNames.add(u.name()));
 
         Map<String, List<ProxyConfig.ModelRoute>> models = parseModels(root.path("models"), upstreamNames);
-        if (models.isEmpty() && upstreams.stream().allMatch(u -> u.passthroughModels().isEmpty())) {
-            throw new ConfigException("Define at least one virtual model in 'models' or one 'passthroughModels' entry");
+        if (models.isEmpty() && upstreams.stream()
+                .allMatch(u -> u.passthroughModels().isEmpty() && !u.discoverModels())) {
+            throw new ConfigException("No model to serve: enable 'discoverModels' on an upstream, "
+                    + "or define a virtual model in 'models' or a 'passthroughModels' entry");
         }
 
         Optional<String> defaultModel = Optional.ofNullable(textOrNull(root, "defaultModel"));
@@ -129,7 +131,12 @@ public final class ConfigLoader {
                 duration(timeoutNode, "request", "10m"),
                 duration(timeoutNode, "shutdown", "10s"));
 
-        return new ProxyConfig(listen, localKeys, upstreams, models, defaultModel, retry, timeouts);
+        JsonNode discoveryNode = root.path("discovery");
+        ProxyConfig.Discovery discovery = new ProxyConfig.Discovery(
+                duration(discoveryNode, "refreshInterval", "1h"),
+                duration(discoveryNode, "timeout", "10s"));
+
+        return new ProxyConfig(listen, localKeys, upstreams, models, defaultModel, retry, timeouts, discovery);
     }
 
     private List<ProxyConfig.Upstream> parseUpstreams(JsonNode node) {
@@ -150,8 +157,7 @@ public final class ConfigLoader {
             Map<String, String> headers = new LinkedHashMap<>();
             item.path("headers").properties().forEach(e -> headers.put(e.getKey(), substitute(e.getValue().asText())));
 
-            List<String> passthrough = new ArrayList<>();
-            item.path("passthroughModels").forEach(m -> passthrough.add(substitute(m.asText())));
+            List<String> passthrough = strings(item.path("passthroughModels"));
 
             Optional<Integer> rpm = item.hasNonNull("maxRequestsPerMinute")
                     ? Optional.of(integer(item, "maxRequestsPerMinute", 0))
@@ -159,7 +165,11 @@ public final class ConfigLoader {
             if (rpm.isPresent() && rpm.get() < 1) {
                 throw new ConfigException(where + ": maxRequestsPerMinute must be at least 1");
             }
-            result.add(new ProxyConfig.Upstream(name, baseUrl, apiKey, headers, passthrough, rpm));
+            boolean discover = bool(item, "discoverModels", true);
+            List<String> include = strings(item.path("includeModels"));
+            List<String> exclude = strings(item.path("excludeModels"));
+            result.add(new ProxyConfig.Upstream(name, baseUrl, apiKey, headers, passthrough, rpm,
+                    discover, include, exclude));
         }
         return result;
     }
@@ -246,6 +256,29 @@ public final class ConfigLoader {
         } catch (NumberFormatException e) {
             throw new ConfigException("'" + field + "' must be an integer, got '" + value + "'");
         }
+    }
+
+    private boolean bool(JsonNode node, String field, boolean fallback) {
+        String value = textOrNull(node, field);
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        return switch (value.trim().toLowerCase(java.util.Locale.ROOT)) {
+            case "true" -> true;
+            case "false" -> false;
+            default -> throw new ConfigException("'" + field + "' must be true or false, got '" + value + "'");
+        };
+    }
+
+    private List<String> strings(JsonNode array) {
+        List<String> values = new ArrayList<>();
+        for (JsonNode item : array) {
+            String value = substitute(item.asText()).trim();
+            if (!value.isEmpty()) {
+                values.add(value);
+            }
+        }
+        return values;
     }
 
     private Duration duration(JsonNode node, String field, String fallback) {

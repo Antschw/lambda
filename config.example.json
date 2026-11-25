@@ -9,13 +9,14 @@
     {
       "name": "provider-a",
       "baseUrl": "https://api.provider-a.example/v1",
-      "apiKey": "${PROVIDER_A_API_KEY}"
+      "apiKey": "${PROVIDER_A_API_KEY}",
+      "excludeModels": ["*embed*", "*whisper*", "*tts*"]
     },
     {
       "name": "provider-b",
       "baseUrl": "https://api.provider-b.example/v1",
       "apiKey": "${PROVIDER_B_API_KEY}",
-      "passthroughModels": ["provider-b-other-model"]
+      "excludeModels": ["*embed*"]
     },
     {
       "name": "provider-c",
@@ -33,7 +34,6 @@
       { "upstream": "provider-c", "model": "qwen3-coder-480b" }
     ]
   },
-  "defaultModel": "coder",
 
   "retry": {
     "maxAttempts": 6,
@@ -41,6 +41,10 @@
     "maxCooldown": "5m",
     "misconfiguredCooldown": "10m",
     "maxWaitWhenAllCooling": "60s"
+  },
+  "discovery": {
+    "refreshInterval": "1h",
+    "timeout": "10s"
   },
   "timeouts": {
     "connect": "10s",

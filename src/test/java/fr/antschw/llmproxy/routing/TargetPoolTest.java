@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -125,6 +126,45 @@ class TargetPoolTest {
         pool.onRetryableFailure(target, Optional.of(Duration.ofSeconds(5)), true);
 
         assertThat(pool.acquire(pool.resolve("fast").orElseThrow(), Set.of())).isInstanceOf(Selection.Unavailable.class);
+    }
+
+    @Test
+    void buildsOneRoutePerDiscoveredModelOverTheUpstreamsExposingIt() {
+        TargetPool pool = pool("");
+
+        pool.updateModels(Map.of("a", Set.of("m1", "m2"), "b", Set.of("m1"), "c", Set.of("m1", "m3")));
+
+        assertThat(pool.modelNames()).containsExactly("coder", "m1", "m2", "m3");
+        assertThat(pool.upstreamsOf("m1")).containsExactly("a", "b", "c");
+        assertThat(pool.upstreamsOf("m2")).containsExactly("a");
+        assertThat(pool.upstreamsOf("m3")).containsExactly("c");
+        assertThat(pool.resolve("m1")).get().extracting(Route::virtual).isEqualTo(false);
+    }
+
+    @Test
+    void keepsCooldownsAcrossModelUpdatesAndDropsVanishedModels() {
+        TargetPool pool = pool("");
+        pool.updateModels(Map.of("a", Set.of("m1"), "b", Set.of("m1", "m2")));
+        Target aM1 = pool.resolve("m1").orElseThrow().targets().getFirst();
+        pool.onRetryableFailure(aM1, Optional.of(Duration.ofSeconds(30)), true);
+
+        pool.updateModels(Map.of("a", Set.of("m1"), "b", Set.of("m1")));
+
+        Route m1 = pool.resolve("m1").orElseThrow();
+        assertThat(pick(pool, m1, 3)).containsOnly("b/m1");
+        assertThat(pool.resolve("m2")).isEmpty();
+    }
+
+    @Test
+    void keepsConfiguredPassthroughModelsWhateverIsDiscovered() {
+        TargetPool pool = new TargetPool(new ConfigLoader(n -> null).parse("""
+                {
+                  "upstreams": [{"name": "a", "baseUrl": "https://a/v1", "apiKey": "k", "passthroughModels": ["static"]}]
+                }"""), clock);
+
+        pool.updateModels(Map.of("a", Set.of("found")));
+
+        assertThat(pool.modelNames()).containsExactly("found", "static");
     }
 
     private TargetPool pool(String extra) {

@@ -12,7 +12,12 @@ import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 
-/** A programmable OpenAI-compatible server running in the test JVM. */
+/**
+ * A programmable OpenAI-compatible server running in the test JVM.
+ *
+ * <p>{@code GET /v1/models} is answered from {@link #models(String...)} and counted apart, so
+ * model discovery does not show up in {@link #received()}.
+ */
 final class FakeUpstream implements AutoCloseable {
 
     /** A request as received by the fake upstream. */
@@ -36,6 +41,9 @@ final class FakeUpstream implements AutoCloseable {
     private final HttpServer server;
     private final List<Received> received = new CopyOnWriteArrayList<>();
     private volatile Behavior behavior;
+    private volatile List<String> models = List.of();
+    private volatile int modelsStatus = 200;
+    private final java.util.concurrent.atomic.AtomicInteger modelRequests = new java.util.concurrent.atomic.AtomicInteger();
 
     FakeUpstream(String name) throws IOException {
         this.name = name;
@@ -44,6 +52,13 @@ final class FakeUpstream implements AutoCloseable {
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.createContext("/", exchange -> {
             try (exchange) {
+                if (exchange.getRequestMethod().equals("GET") && exchange.getRequestURI().getPath().equals("/v1/models")) {
+                    modelRequests.incrementAndGet();
+                    String data = models.stream().map(id -> "{\"id\":\"" + id + "\",\"object\":\"model\"}")
+                            .collect(java.util.stream.Collectors.joining(","));
+                    send(exchange, modelsStatus, "{\"object\":\"list\",\"data\":[" + data + "]}", Map.of());
+                    return;
+                }
                 Received request = new Received(exchange.getRequestMethod(), exchange.getRequestURI().getPath(),
                         exchange.getRequestURI().getRawQuery(), Map.copyOf(exchange.getRequestHeaders()),
                         new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
@@ -60,6 +75,22 @@ final class FakeUpstream implements AutoCloseable {
 
     List<Received> received() {
         return received;
+    }
+
+    /** Sets the ids listed by {@code GET /v1/models} (duplicates allowed). */
+    FakeUpstream models(String... ids) {
+        this.models = List.of(ids);
+        return this;
+    }
+
+    /** Makes {@code GET /v1/models} answer with this status. */
+    FakeUpstream modelsStatus(int status) {
+        this.modelsStatus = status;
+        return this;
+    }
+
+    int modelRequests() {
+        return modelRequests.get();
     }
 
     FakeUpstream behave(Behavior behavior) {

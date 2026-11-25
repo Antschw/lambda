@@ -65,8 +65,11 @@ public final class Main {
         LOG.info("LLM proxy listening on http://{}:{}/v1 ({} upstream(s), client authentication {})",
                 config.listen().host(), server.port(), config.upstreams().size(),
                 config.localApiKeys().isEmpty() ? "disabled" : "enabled");
-        server.pool().status().forEach((model, targets) -> LOG.info("Model '{}' -> {}", model,
-                targets.stream().map(t -> t.target()).toList()));
+        server.pool().modelNames().forEach(model -> LOG.info("Model '{}' -> {}", model,
+                server.pool().upstreamsOf(model)));
+        if (server.pool().modelNames().isEmpty()) {
+            LOG.warn("No model is served yet: check the upstreams' keys and URLs");
+        }
 
         try {
             stopped.await();
