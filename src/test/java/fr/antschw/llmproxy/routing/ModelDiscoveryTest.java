@@ -34,4 +34,13 @@ class ModelDiscoveryTest {
     void returnsNullWithoutModelArray() throws IOException {
         assertThat(ModelDiscovery.parseIds(JSON.readTree("{\"error\":\"nope\"}"))).isNull();
     }
+
+    @Test
+    void readsAdvertisedContextSizesKeepingTheLargestForDuplicates() throws IOException {
+        String body = "{\"data\":[{\"id\":\"a\",\"context_length\":32768},{\"id\":\"b\",\"max_model_len\":8192},"
+                + "{\"id\":\"a\",\"context_length\":131072},{\"id\":\"c\"},{\"id\":\"d\",\"context_window\":0}]}";
+
+        assertThat(ModelDiscovery.parseLimits(JSON.readTree(body)))
+                .containsExactly(java.util.Map.entry("a", 131_072), java.util.Map.entry("b", 8_192));
+    }
 }

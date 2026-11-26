@@ -167,6 +167,63 @@ class TargetPoolTest {
         assertThat(pool.modelNames()).containsExactly("found", "static");
     }
 
+    @Test
+    void resolvesContextLimitsFromModelPatternsThenUpstreamThenAdvertisedSizes() {
+        TargetPool pool = new TargetPool(new ConfigLoader(n -> null).parse("""
+                {
+                  "upstreams": [
+                    {"name": "a", "baseUrl": "https://a/v1", "apiKey": "k", "maxContextTokens": 32000,
+                     "modelContextTokens": {"*-128k": 128000}},
+                    {"name": "b", "baseUrl": "https://b/v1", "apiKey": "k"}
+                  ]
+                }"""), clock);
+        pool.updateModels(Map.of("a", Set.of("m", "m-128k"), "b", Set.of("m", "x")),
+                Map.of("a", Map.of("m", 64_000), "b", Map.of("m", 16_000)));
+
+        assertThat(pool.contextLimit(target(pool, "m-128k", "a"))).hasValue(128_000L);
+        assertThat(pool.contextLimit(target(pool, "m", "a"))).hasValue(32_000L);
+        assertThat(pool.contextLimit(target(pool, "m", "b"))).hasValue(16_000L);
+        assertThat(pool.contextLimit(target(pool, "x", "b"))).isEmpty();
+        assertThat(pool.largestContextLimit("m")).hasValue(32_000L);
+        assertThat(pool.largestContextLimit("x")).isEmpty();
+    }
+
+    @Test
+    void excludesTargetsTooSmallForARequestButNeverAllOfThem() {
+        TargetPool pool = new TargetPool(new ConfigLoader(n -> null).parse("""
+                {
+                  "upstreams": [
+                    {"name": "a", "baseUrl": "https://a/v1", "apiKey": "k", "maxContextTokens": 8000},
+                    {"name": "b", "baseUrl": "https://b/v1", "apiKey": "k", "maxContextTokens": 32000},
+                    {"name": "c", "baseUrl": "https://c/v1", "apiKey": "k", "maxContextTokens": 32000}
+                  ]
+                }"""), clock);
+        pool.updateModels(Map.of("a", Set.of("m"), "b", Set.of("m"), "c", Set.of("m")));
+        Route route = pool.resolve("m").orElseThrow();
+
+        assertThat(pool.tooSmallFor(route, 5_000)).isEmpty();
+        assertThat(pool.tooSmallFor(route, 20_000)).extracting(Target::id).containsExactly("a/m");
+        assertThat(pool.tooSmallFor(route, 50_000)).extracting(Target::id).containsExactly("a/m");
+    }
+
+    @Test
+    void suspectsTruncationWhenTheUpstreamCountsFarFewerTokens() {
+        TargetPool pool = pool("");
+        Target a = pool.resolve("coder").orElseThrow().targets().getFirst();
+
+        assertThat(pool.onUsage(a, 10_000, 7_000)).isFalse();
+        assertThat(pool.onUsage(a, 10_000, 5_000)).isTrue();
+        assertThat(pool.onUsage(a, 1_000, 10)).isFalse();
+        assertThat(pool.status().get("coder").getFirst().truncationsSuspected()).isEqualTo(1);
+        assertThat(pool.status().get("coder").getFirst().maxPromptTokensSeen()).isEqualTo(7_000);
+        assertThat(pool.contextLimit(a)).isEmpty();
+    }
+
+    private static Target target(TargetPool pool, String model, String upstream) {
+        return pool.resolve(model).orElseThrow().targets().stream()
+                .filter(t -> t.upstream().name().equals(upstream)).findFirst().orElseThrow();
+    }
+
     private TargetPool pool(String extra) {
         return new TargetPool(new ConfigLoader(n -> null).parse("{" + extra + """
                 "upstreams": [

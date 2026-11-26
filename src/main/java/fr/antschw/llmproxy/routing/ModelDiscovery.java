@@ -40,6 +40,11 @@ public final class ModelDiscovery {
     private final ProxyConfig config;
     private final HttpClient client;
     private final Map<String, Set<String>> lastKnown = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, Integer>> lastKnownLimits = new ConcurrentHashMap<>();
+
+    /** Fields of a {@code /models} entry that may carry the model's context size. */
+    private static final List<String> CONTEXT_FIELDS =
+            List.of("context_length", "context_window", "max_model_len", "max_context_length");
 
     /**
      * @param config validated configuration
@@ -84,6 +89,14 @@ public final class ModelDiscovery {
         return result;
     }
 
+    /**
+     * @return context sizes advertised in the last successful {@code /models} answers, by upstream
+     *         name then model id
+     */
+    public Map<String, Map<String, Integer>> advertisedLimits() {
+        return Map.copyOf(lastKnownLimits);
+    }
+
     private void refresh(Upstream upstream) {
         String base = upstream.baseUrl().toString();
         URI uri = URI.create((base.endsWith("/") ? base : base + "/") + "models");
@@ -109,8 +122,10 @@ public final class ModelDiscovery {
         }
 
         List<String> ids;
+        JsonNode root;
         try {
-            ids = parseIds(JSON.readTree(response.body()));
+            root = JSON.readTree(response.body());
+            ids = parseIds(root);
         } catch (IOException e) {
             keepPrevious(upstream, "returned invalid JSON");
             return;
@@ -127,6 +142,9 @@ public final class ModelDiscovery {
             LOG.debug("Upstream '{}' listed {} duplicate model id(s), each one is used once",
                     upstream.name(), ids.size() - unique.size());
         }
+        Map<String, Integer> limits = new java.util.HashMap<>(parseLimits(root));
+        limits.keySet().retainAll(kept);
+        lastKnownLimits.put(upstream.name(), Map.copyOf(limits));
         Set<String> previous = lastKnown.put(upstream.name(), Set.copyOf(kept));
         if (!kept.equals(previous)) {
             LOG.info("Upstream '{}': {} model(s) discovered{}", upstream.name(), kept.size(),
@@ -147,8 +165,8 @@ public final class ModelDiscovery {
      * @return the ids, or {@code null} when the document has no model array
      */
     static List<String> parseIds(JsonNode root) {
-        JsonNode array = root.isArray() ? root : root.has("data") ? root.get("data") : root.get("models");
-        if (array == null || !array.isArray()) {
+        JsonNode array = modelArray(root);
+        if (array == null) {
             return null;
         }
         List<String> ids = new ArrayList<>();
@@ -159,5 +177,39 @@ public final class ModelDiscovery {
             }
         }
         return ids;
+    }
+
+    /**
+     * Reads the context size advertised for each model, if any ({@code context_length},
+     * {@code context_window}, {@code max_model_len} or {@code max_context_length}). When a model
+     * is listed several times, the largest value wins.
+     *
+     * @return context size by model id
+     */
+    static Map<String, Integer> parseLimits(JsonNode root) {
+        Map<String, Integer> limits = new LinkedHashMap<>();
+        JsonNode array = modelArray(root);
+        if (array == null) {
+            return limits;
+        }
+        for (JsonNode item : array) {
+            JsonNode id = item.has("id") ? item.get("id") : item.get("name");
+            if (id == null || !id.isTextual()) {
+                continue;
+            }
+            for (String field : CONTEXT_FIELDS) {
+                JsonNode value = item.get(field);
+                if (value != null && value.canConvertToInt() && value.asInt() > 0) {
+                    limits.merge(id.asText(), value.asInt(), Math::max);
+                    break;
+                }
+            }
+        }
+        return limits;
+    }
+
+    private static JsonNode modelArray(JsonNode root) {
+        JsonNode array = root.isArray() ? root : root.has("data") ? root.get("data") : root.get("models");
+        return array != null && array.isArray() ? array : null;
     }
 }

@@ -35,6 +35,9 @@ import java.util.stream.Collectors;
  */
 public final class TargetPool {
 
+    /** Below this estimate, prompt token comparisons are too noisy to suspect a truncation. */
+    static final long TRUNCATION_MIN_ESTIMATE = 2_000;
+
     private final ProxyConfig config;
     private final Clock clock;
     private final Map<String, Route> virtualRoutes = new LinkedHashMap<>();
@@ -42,6 +45,7 @@ public final class TargetPool {
     private final Map<String, TargetState> states = new ConcurrentHashMap<>();
     private final Map<String, RateWindow> windows = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> cursors = new ConcurrentHashMap<>();
+    private volatile Map<String, Integer> advertisedLimits = Map.of();
 
     /**
      * @param config validated configuration
@@ -72,7 +76,22 @@ public final class TargetPool {
      * @param discovered model ids by upstream name (upstreams missing from the map contribute only
      *                   their configured passthrough models)
      */
-    public synchronized void updateModels(Map<String, ? extends Collection<String>> discovered) {
+    public void updateModels(Map<String, ? extends Collection<String>> discovered) {
+        updateModels(discovered, Map.of());
+    }
+
+    /**
+     * Same as {@link #updateModels(Map)}, with the context sizes the upstreams advertise.
+     *
+     * @param discovered model ids by upstream name
+     * @param limits     advertised context size by upstream name, then model id
+     */
+    public synchronized void updateModels(Map<String, ? extends Collection<String>> discovered,
+                                          Map<String, Map<String, Integer>> limits) {
+        Map<String, Integer> advertised = new ConcurrentHashMap<>();
+        limits.forEach((upstream, models) -> models.forEach((model, tokens) ->
+                advertised.put(upstream + "/" + model, tokens)));
+        advertisedLimits = advertised;
         Map<String, List<Target>> byModel = new TreeMap<>();
         for (Upstream upstream : config.upstreams()) {
             Set<String> models = new LinkedHashSet<>(upstream.passthroughModels());
@@ -170,6 +189,103 @@ public final class TargetPool {
     }
 
     /**
+     * Effective context limit of a target, in tokens: the upstream's {@code modelContextTokens}
+     * (first matching pattern), then its {@code maxContextTokens}, then the size advertised by its
+     * {@code /models}, then, if {@code context.learnFromTruncation} is on, the size deduced from
+     * suspected truncations.
+     *
+     * @param target the target
+     * @return the limit, or empty if unknown (unlimited)
+     */
+    public Optional<Long> contextLimit(Target target) {
+        Upstream upstream = target.upstream();
+        for (Map.Entry<String, Integer> entry : upstream.modelContextTokens().entrySet()) {
+            if (new ModelFilter(List.of(entry.getKey()), List.of()).test(target.model())) {
+                return Optional.of(entry.getValue().longValue());
+            }
+        }
+        if (upstream.maxContextTokens().isPresent()) {
+            return Optional.of(upstream.maxContextTokens().get().longValue());
+        }
+        Integer advertised = advertisedLimits.get(target.id());
+        if (advertised != null) {
+            return Optional.of(advertised.longValue());
+        }
+        TargetState state = states.get(target.id());
+        if (config.context().learnFromTruncation() && state != null && state.learnedLimit() > 0) {
+            return Optional.of(state.learnedLimit());
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Targets of a route too small for a request. When no target is large enough, every target
+     * except those with the largest limit is returned, since the size is only an estimate and the
+     * provider gets the last word.
+     *
+     * @param route  the route
+     * @param tokens estimated tokens the request needs (prompt and requested output)
+     * @return targets to exclude for this request, possibly empty
+     */
+    public Set<Target> tooSmallFor(Route route, long tokens) {
+        Set<Target> tooSmall = new LinkedHashSet<>();
+        long largest = 0;
+        boolean unlimited = false;
+        for (Target target : route.targets()) {
+            Optional<Long> limit = contextLimit(target);
+            if (limit.isEmpty()) {
+                unlimited = true;
+            } else {
+                largest = Math.max(largest, limit.get());
+                if (limit.get() < tokens) {
+                    tooSmall.add(target);
+                }
+            }
+        }
+        if (!unlimited && tooSmall.size() == route.targets().size()) {
+            long max = largest;
+            tooSmall.removeIf(t -> contextLimit(t).orElse(0L) == max);
+        }
+        return tooSmall;
+    }
+
+    /**
+     * Records the prompt size an upstream reported and whether it looks like a silent truncation:
+     * far fewer tokens than the proxy estimated it sent.
+     *
+     * @param target          the target
+     * @param estimatedTokens prompt tokens estimated by the proxy
+     * @param promptTokens    prompt tokens reported by the upstream
+     * @return whether a silent truncation is suspected
+     */
+    public boolean onUsage(Target target, long estimatedTokens, long promptTokens) {
+        boolean truncated = estimatedTokens >= TRUNCATION_MIN_ESTIMATE
+                && promptTokens < estimatedTokens * config.context().truncationRatio();
+        states.get(target.id()).recordUsage(promptTokens, truncated);
+        return truncated;
+    }
+
+    /**
+     * @param model a model name served by the proxy
+     * @return the largest context limit among its targets, or empty if one is unknown or none is set
+     */
+    public Optional<Long> largestContextLimit(String model) {
+        Route route = virtualRoutes.containsKey(model) ? virtualRoutes.get(model) : passthroughRoutes.get(model);
+        if (route == null) {
+            return Optional.empty();
+        }
+        long largest = 0;
+        for (Target target : route.targets()) {
+            Optional<Long> limit = contextLimit(target);
+            if (limit.isEmpty()) {
+                return Optional.empty();
+            }
+            largest = Math.max(largest, limit.get());
+        }
+        return Optional.of(largest);
+    }
+
+    /**
      * Records a successful call; the target's failure counter is reset.
      *
      * @param target the target
@@ -226,7 +342,7 @@ public final class TargetPool {
         Map<String, List<TargetStatus>> result = new LinkedHashMap<>();
         for (Route route : allRoutes()) {
             result.put(route.name(), route.targets().stream()
-                    .map(t -> TargetStatus.of(t, states.get(t.id()).snapshot(now)))
+                    .map(t -> TargetStatus.of(t, states.get(t.id()).snapshot(now), contextLimit(t)))
                     .toList());
         }
         return result;
@@ -285,14 +401,19 @@ public final class TargetPool {
      * @param successes           successful attempts
      * @param rateLimited         attempts answered with 429
      * @param failures            other failed attempts
+     * @param contextLimit        effective context limit, if known
+     * @param maxPromptTokensSeen largest prompt size the upstream reported
+     * @param truncationsSuspected responses that looked silently truncated
      */
     public record TargetStatus(String target, boolean available, Instant cooldownUntil, int consecutiveFailures,
                                boolean misconfigured, long requests, long successes, long rateLimited,
-                               long failures) {
+                               long failures, Optional<Long> contextLimit, long maxPromptTokensSeen,
+                               long truncationsSuspected) {
 
-        static TargetStatus of(Target target, TargetState.Snapshot s) {
+        static TargetStatus of(Target target, TargetState.Snapshot s, Optional<Long> contextLimit) {
             return new TargetStatus(target.id(), !s.cooling(), s.cooldownUntil(), s.consecutiveFailures(),
-                    s.misconfigured(), s.requests(), s.successes(), s.rateLimited(), s.failures());
+                    s.misconfigured(), s.requests(), s.successes(), s.rateLimited(), s.failures(), contextLimit,
+                    s.maxPromptTokensSeen(), s.truncationsSuspected());
         }
     }
 }

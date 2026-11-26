@@ -136,7 +136,20 @@ public final class ConfigLoader {
                 duration(discoveryNode, "refreshInterval", "1h"),
                 duration(discoveryNode, "timeout", "10s"));
 
-        return new ProxyConfig(listen, localKeys, upstreams, models, defaultModel, retry, timeouts, discovery);
+        JsonNode contextNode = root.path("context");
+        ProxyConfig.Context context = new ProxyConfig.Context(
+                decimal(contextNode, "charsPerToken", 3.5),
+                decimal(contextNode, "truncationRatio", 0.6),
+                bool(contextNode, "learnFromTruncation", false));
+        if (context.charsPerToken() <= 0) {
+            throw new ConfigException("context.charsPerToken must be greater than 0");
+        }
+        if (context.truncationRatio() <= 0 || context.truncationRatio() > 1) {
+            throw new ConfigException("context.truncationRatio must be greater than 0 and at most 1");
+        }
+
+        return new ProxyConfig(listen, localKeys, upstreams, models, defaultModel, retry, timeouts, discovery,
+                context);
     }
 
     private List<ProxyConfig.Upstream> parseUpstreams(JsonNode node) {
@@ -168,8 +181,25 @@ public final class ConfigLoader {
             boolean discover = bool(item, "discoverModels", true);
             List<String> include = strings(item.path("includeModels"));
             List<String> exclude = strings(item.path("excludeModels"));
+            Optional<Integer> maxContext = item.hasNonNull("maxContextTokens")
+                    ? Optional.of(positive(item, "maxContextTokens", where))
+                    : Optional.empty();
+            Map<String, Integer> modelContext = new LinkedHashMap<>();
+            item.path("modelContextTokens").properties().forEach(e -> {
+                String value = substitute(e.getValue().asText()).trim();
+                try {
+                    int tokens = Integer.parseInt(value);
+                    if (tokens < 1) {
+                        throw new NumberFormatException();
+                    }
+                    modelContext.put(substitute(e.getKey()), tokens);
+                } catch (NumberFormatException ex) {
+                    throw new ConfigException(where + ": modelContextTokens '" + e.getKey()
+                            + "' must be a positive integer, got '" + value + "'");
+                }
+            });
             result.add(new ProxyConfig.Upstream(name, baseUrl, apiKey, headers, passthrough, rpm,
-                    discover, include, exclude));
+                    discover, include, exclude, maxContext, modelContext));
         }
         return result;
     }
@@ -255,6 +285,26 @@ public final class ConfigLoader {
             return Integer.parseInt(value.trim());
         } catch (NumberFormatException e) {
             throw new ConfigException("'" + field + "' must be an integer, got '" + value + "'");
+        }
+    }
+
+    private int positive(JsonNode node, String field, String where) {
+        int value = integer(node, field, 0);
+        if (value < 1) {
+            throw new ConfigException(where + ": " + field + " must be at least 1");
+        }
+        return value;
+    }
+
+    private double decimal(JsonNode node, String field, double fallback) {
+        String value = textOrNull(node, field);
+        if (value == null || value.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Double.parseDouble(value.trim());
+        } catch (NumberFormatException e) {
+            throw new ConfigException("'" + field + "' must be a number, got '" + value + "'");
         }
     }
 

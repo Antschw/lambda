@@ -23,6 +23,8 @@ Cline / pi / opencode / ... ──► http://localhost:4000/v1   (one provider f
   `retry-after-ms`, `x-ratelimit-reset-*`), or with exponential backoff when it gives no hint.
 - **Waits instead of failing** when every provider of a model is cooling down (bounded).
 - **Optional proactive limit** per provider (`maxRequestsPerMinute`) to avoid 429s altogether.
+- **Context limits** per provider or model: long requests skip providers that cannot hold them.
+- **Silent truncation detection** and a **probe** command measuring a provider's real context.
 - **Streaming (SSE)** passed through chunk by chunk, no buffering.
 - **Virtual models** (optional): one name grouping models that are named differently on each
   provider.
@@ -73,6 +75,7 @@ bin/llm-proxy.sh status     # PID + /health
 bin/llm-proxy.sh logs       # follow logs/llm-proxy.log
 bin/llm-proxy.sh restart    # e.g. after changing config.json
 bin/llm-proxy.sh stop       # graceful stop: in-flight requests are allowed to finish
+bin/llm-proxy.sh probe api2 mistral-small   # measure a provider's real context (foreground)
 ```
 
 ### Windows (PowerShell)
@@ -82,6 +85,7 @@ powershell -ExecutionPolicy Bypass -File bin\llm-proxy.ps1 start
 powershell -ExecutionPolicy Bypass -File bin\llm-proxy.ps1 status
 powershell -ExecutionPolicy Bypass -File bin\llm-proxy.ps1 logs
 powershell -ExecutionPolicy Bypass -File bin\llm-proxy.ps1 stop
+powershell -ExecutionPolicy Bypass -File bin\llm-proxy.ps1 probe api2 mistral-small max=131072
 ```
 
 `-ExecutionPolicy Bypass` only applies to that command and needs no admin rights. The proxy
@@ -134,8 +138,13 @@ The minimal configuration lists the providers; models are discovered:
 | `upstreams[].excludeModels` | `[]` | Glob patterns of discovered models to ignore, e.g. `["*embed*", "*whisper*"]`. |
 | `upstreams[].passthroughModels` | `[]` | Models always served by this provider, even if not discovered. |
 | `upstreams[].maxRequestsPerMinute` | none | Proactive sliding-window limit for this provider. |
+| `upstreams[].maxContextTokens` | none | Context size of this provider's models, in tokens. Requests estimated larger skip this provider. |
+| `upstreams[].modelContextTokens` | `{}` | Context size by model glob pattern (first match wins), e.g. `{"*-128k": 128000}`; overrides `maxContextTokens`. |
 | `models` | `{}` | Optional virtual models: name → list of `{ "upstream", "model" }` targets, see below. |
 | `defaultModel` | none | Virtual model used when the request has no or an unknown `model`. |
+| `context.charsPerToken` | `3.5` | Characters per token used to estimate request sizes. Lower is more cautious. |
+| `context.truncationRatio` | `0.6` | A response whose `prompt_tokens` is below this share of the estimate is reported as a possible silent truncation. |
+| `context.learnFromTruncation` | `false` | After a suspected truncation, use the size the provider reported as its limit (until restart), when no limit is configured. |
 | `discovery.refreshInterval` | `1h` | How often model lists are read again; `0` reads them only at startup. |
 | `discovery.timeout` | `10s` | Time allowed for a provider to answer `GET /models`. |
 | `retry.maxAttempts` | `6` | Maximum provider calls per client request. |
@@ -178,6 +187,57 @@ Clients ask for `coder`; the proxy sends each provider its own id. A virtual mod
 discovered model with the same name. The same provider can appear several times with different
 models.
 
+### Context limits and silent truncation
+
+Agentic tools resend the whole conversation on every call: the tool's system prompt (with its
+tool instructions), your task, and every action result so far. It grows quickly.
+
+When a request is longer than the context a provider really deployed, some servers return an
+error (`400 context_length_exceeded`), but others **silently drop the start of the prompt**
+(typical of Ollama with a small `num_ctx`, or vLLM/TGI with a small `--max-model-len` and
+truncation enabled). The first thing dropped is the system prompt and your task: the model only
+sees the last tool results, believes it is done and answers "Task completed". A model can support
+128k tokens while the provider deployed it with much less.
+
+What the proxy does about it:
+
+1. **Detects it.** For every request it logs the tokens it sent (estimate) and the tokens the
+   provider says it processed (`usage.prompt_tokens`, read from the response or the last stream
+   chunk without changing them):
+   ```
+   m1 -> api2/m1 attempt 1/6: 200 in 4.1s (first byte 1.2s), ~42.9k tokens sent, upstream counted 15.9k + 120 out, finish=stop
+   WARN ... possible silent truncation: ~42.9k tokens sent but upstream counted 15.9k ...
+   ```
+   `/health` shows, per target, `truncationsSuspected` and `maxPromptTokensSeen`. A
+   `finish=length` warning means the answer itself was cut by the output token limit.
+2. **Measures it.** The probe command sends "needle in a haystack" conversations of growing size
+   directly to one provider (a secret code at the start, filler, then "what was the code?") and
+   finds the largest size the model still sees entirely:
+   ```bash
+   bin/llm-proxy.sh probe api2 mistral-small            # optional: --min 4000 --max 131072
+   # Windows: powershell -ExecutionPolicy Bypass -File bin\llm-proxy.ps1 probe api2 mistral-small max=131072
+   ```
+   ```
+     ~ 16,065 tokens sent  upstream counted 13,978  OK (code remembered)
+     ~ 32,150 tokens sent  upstream counted 15,924  FORGOTTEN (start of the conversation was dropped)
+     ...
+   Works up to ~19,327 tokens, fails from ~20,228 tokens.
+   Suggested setting for upstream 'api2': "maxContextTokens": 17000
+   ```
+   Each step is a real request (about 10 in total, some long): it uses the provider's quota.
+3. **Routes around it.** With `maxContextTokens` (or `modelContextTokens`) set, a request whose
+   estimate (prompt + requested `max_tokens`) exceeds a provider's limit skips that provider; it
+   is still used for shorter requests. If no provider is large enough, the request goes to the
+   one(s) with the largest limit, since the size is only an estimate. Limits advertised by a
+   provider's `/models` (`context_length`, `max_model_len`...) are used when nothing is configured.
+4. **Retries on explicit errors.** A `400`/`413` saying the context is too long makes the proxy
+   try another provider for that request, without cooldown. Other `400`s are returned as is.
+
+Sizes are estimates (no tokenizer): keep a margin, or lower `context.charsPerToken` (code and
+non-English text use more tokens per character). The tool itself must also know the smaller
+context to compact its history in time: give it the context of the provider(s) you want it to
+fit in (the client templates use the largest known limit of each model).
+
 ### How provider statuses are handled
 
 | Provider answer | Proxy behaviour |
@@ -187,6 +247,7 @@ models.
 | `408`, `500`, `502`, `503`, `504`, `520`–`599`, timeout, network error | Same as 429. |
 | `401`, `403` | Logged as a configuration error; target set aside for `misconfiguredCooldown`; next target tried. |
 | `404` | Next target tried for this request only (unknown model or endpoint on that provider), no cooldown. |
+| `400`, `413` saying the context is too long | Next target tried for this request only, no cooldown. |
 | Other `4xx` (e.g. `400`) | Returned as is: the request itself is wrong, retrying would not help. |
 
 When every attempt fails, the client receives the last provider error, or a `429` with a
@@ -196,10 +257,10 @@ When every attempt fails, the client receives the last provider error, or a `429
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /v1/models`, `GET /v1/models/{id}` | Models served by the proxy (virtual first, then discovered, sorted). |
+| `GET /v1/models`, `GET /v1/models/{id}` | Models served by the proxy (virtual first, then discovered, sorted), with their `upstreams` and, when every upstream's limit is known, the largest `context_length`. |
 | `* /v1/...` | Forwarded with failover: `chat/completions`, `completions`, `embeddings`, `responses`... Any path works as long as the providers support it. The `model` field is forwarded unchanged (rewritten only for virtual models). |
 | `GET /templates/opencode.json`, `GET /templates/pi.json` | Ready-to-paste client configurations listing every current model (see below). |
-| `GET /health` | Health of every target (no authentication). Always `200`; `status` is `ok` or `degraded`. |
+| `GET /health` | Health of every target (no authentication): availability, cooldown, counters, `contextLimit`, `maxPromptTokensSeen`, `truncationsSuspected`. Always `200`; `status` is `ok` or `degraded`. |
 
 The `/v1` prefix is optional (`/chat/completions` works too), as tools differ on whether they add
 it to the base URL. Every response carries an `X-LLM-Proxy-Target` header naming the target that
@@ -261,7 +322,8 @@ Merge it by hand if you already have custom providers in that file. The template
 }
 ```
 
-Optional per-model fields: `contextWindow` (default 128000), `maxTokens` (default 16384),
+`contextWindow` is filled in when the proxy knows the model's context (configured or advertised
+limits). Other optional per-model fields: `maxTokens` (default 16384),
 `reasoning`, `input`. Then select a `llm-proxy` model from pi's model selector.
 
 ### opencode
@@ -295,8 +357,8 @@ curl -s -H "Authorization: Bearer $LLM_PROXY_LOCAL_KEY" \
 ```
 
 Merge the `llm-proxy` entry into your existing configuration, then pick a model with `/models`
-or set `"model": "llm-proxy/qwen3-coder"`. Optional per-model `limit`, e.g.
-`"limit": { "context": 128000, "output": 16384 }`.
+or set `"model": "llm-proxy/qwen3-coder"`. `limit.context` is filled in when the proxy knows
+the model's context; you may add `"output"` to it, e.g. `"limit": { "context": 128000, "output": 16384 }`.
 
 Older opencode versions use `provider` / `npm: "@ai-sdk/openai-compatible"` / `options` instead:
 `/templates/opencode.json?format=legacy` produces that format.
@@ -343,8 +405,9 @@ bin/                        background start scripts (Bash, PowerShell)
 src/main/java/fr/antschw/llmproxy/
   Main.java                 entry point
   config/                   configuration records, JSON loader, duration parser
-  routing/                  target pool (round-robin, cooldowns, rate windows), model discovery
-                            and filters, Retry-After parsing
+  routing/                  target pool (round-robin, cooldowns, rate windows, context limits),
+                            model discovery and filters, request size estimate, Retry-After parsing
+  probe/                    context probe command
   http/                     HTTP server, forwarding with failover and streaming, client templates,
                             auth, responses
 src/main/resources/logback.xml
@@ -358,6 +421,7 @@ mvn test
 ```
 
 The tests start fake providers in the JVM and check round-robin, model discovery (spreading,
-duplicates, filters, refresh, failures), model rewriting, failover on 429/5xx/network errors,
+duplicates, filters, refresh, failures), context limits, silent truncation detection, the
+context probe, model rewriting, failover on 429/5xx/network errors,
 cooldowns, waiting when all targets are cooling, 401/404 handling, streaming, models listing,
 client templates, authentication, and configuration validation.

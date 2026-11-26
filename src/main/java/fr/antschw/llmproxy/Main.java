@@ -4,6 +4,7 @@ import fr.antschw.llmproxy.config.ConfigException;
 import fr.antschw.llmproxy.config.ConfigLoader;
 import fr.antschw.llmproxy.config.ProxyConfig;
 import fr.antschw.llmproxy.http.ProxyServer;
+import fr.antschw.llmproxy.probe.ProbeCommand;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -18,6 +19,9 @@ import java.util.concurrent.CountDownLatch;
  *
  * <p>The configuration file is, in order: the first argument, the {@code LLM_PROXY_CONFIG}
  * environment variable, or {@code config.json} in the working directory.
+ *
+ * <p>{@code probe <upstream> <model> ...} runs the context probe instead of the proxy
+ * (see {@link ProbeCommand}).
  */
 public final class Main {
 
@@ -30,6 +34,9 @@ public final class Main {
      * @param args optional path to the configuration file
      */
     public static void main(String[] args) {
+        if (args.length > 0 && args[0].equals("probe")) {
+            System.exit(ProbeCommand.run(java.util.Arrays.copyOfRange(args, 1, args.length), System.out));
+        }
         Path configFile = Path.of(args.length > 0 ? args[0]
                 : System.getenv().getOrDefault("LLM_PROXY_CONFIG", "config.json"));
         if (!Files.isRegularFile(configFile)) {

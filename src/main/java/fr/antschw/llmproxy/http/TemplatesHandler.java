@@ -7,7 +7,10 @@ import com.sun.net.httpserver.HttpExchange;
 import fr.antschw.llmproxy.routing.TargetPool;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * Serves ready-to-paste client configurations listing every model the proxy currently serves,
@@ -18,7 +21,9 @@ import java.util.List;
  *         versions using the older {@code provider}/{@code npm}/{@code options} keys)</li>
  *     <li>{@code GET /templates/pi.json}: pi {@code models.json}</li>
  * </ul>
- * The base URL is built from the request's {@code Host} header (and {@code X-Forwarded-Proto}),
+ * The largest known context limit of each model is included ({@code limit.context} for
+ * opencode, {@code contextWindow} for pi): the proxy routes long requests to the upstreams able to
+ * hold them. The base URL is built from the request's {@code Host} header (and {@code X-Forwarded-Proto}),
  * so it is right however the proxy is reached. The API key is referenced through the
  * {@code LLM_PROXY_LOCAL_KEY} environment variable, never written in the template.
  */
@@ -44,7 +49,8 @@ final class TemplatesHandler {
         String query = exchange.getRequestURI().getQuery();
         boolean legacy = query != null && List.of(query.split("&")).contains("format=legacy");
         String baseUrl = baseUrl(exchange);
-        List<String> models = pool.modelNames();
+        Map<String, Optional<Long>> models = new LinkedHashMap<>();
+        pool.modelNames().forEach(model -> models.put(model, pool.largestContextLimit(model)));
         switch (name) {
             case "opencode.json" -> Responses.json(exchange, 200,
                     legacy ? opencodeLegacy(baseUrl, models) : opencode(baseUrl, models));
@@ -54,7 +60,7 @@ final class TemplatesHandler {
         }
     }
 
-    static ObjectNode opencode(String baseUrl, List<String> models) {
+    static ObjectNode opencode(String baseUrl, Map<String, Optional<Long>> models) {
         ObjectNode root = NODES.objectNode().put("$schema", "https://opencode.ai/config.json");
         ObjectNode provider = root.putObject("providers").putObject(PROVIDER_ID)
                 .put("name", PROVIDER_NAME)
@@ -63,11 +69,14 @@ final class TemplatesHandler {
                 .put("baseURL", baseUrl)
                 .put("apiKey", "{env:" + KEY_VARIABLE + "}");
         ObjectNode list = provider.putObject("models");
-        models.forEach(model -> list.putObject(model).put("name", model));
+        models.forEach((model, limit) -> {
+            ObjectNode entry = list.putObject(model).put("name", model);
+            limit.ifPresent(tokens -> entry.putObject("limit").put("context", tokens));
+        });
         return root;
     }
 
-    static ObjectNode opencodeLegacy(String baseUrl, List<String> models) {
+    static ObjectNode opencodeLegacy(String baseUrl, Map<String, Optional<Long>> models) {
         ObjectNode root = NODES.objectNode().put("$schema", "https://opencode.ai/config.json");
         ObjectNode provider = root.putObject("provider").putObject(PROVIDER_ID)
                 .put("npm", "@ai-sdk/openai-compatible")
@@ -76,11 +85,14 @@ final class TemplatesHandler {
                 .put("baseURL", baseUrl)
                 .put("apiKey", "{env:" + KEY_VARIABLE + "}");
         ObjectNode list = provider.putObject("models");
-        models.forEach(model -> list.putObject(model).put("name", model));
+        models.forEach((model, limit) -> {
+            ObjectNode entry = list.putObject(model).put("name", model);
+            limit.ifPresent(tokens -> entry.putObject("limit").put("context", tokens));
+        });
         return root;
     }
 
-    static ObjectNode pi(String baseUrl, List<String> models) {
+    static ObjectNode pi(String baseUrl, Map<String, Optional<Long>> models) {
         ObjectNode root = NODES.objectNode().put("$schema", "https://pi.dev/schemas/models.schema.json");
         ObjectNode provider = root.putObject("providers").putObject(PROVIDER_ID)
                 .put("name", PROVIDER_NAME)
@@ -88,7 +100,10 @@ final class TemplatesHandler {
                 .put("api", "openai-completions")
                 .put("apiKey", "$" + KEY_VARIABLE);
         ArrayNode list = provider.putArray("models");
-        models.forEach(model -> list.addObject().put("id", model).put("name", model));
+        models.forEach((model, limit) -> {
+            ObjectNode entry = list.addObject().put("id", model).put("name", model);
+            limit.ifPresent(tokens -> entry.put("contextWindow", tokens));
+        });
         return root;
     }
 

@@ -19,6 +19,7 @@ import java.util.Set;
  * @param retry                  failover and cooldown tuning
  * @param timeouts               network timeouts
  * @param discovery              automatic model discovery tuning
+ * @param context                request size estimation and truncation detection
  */
 public record ProxyConfig(
         Listen listen,
@@ -28,7 +29,8 @@ public record ProxyConfig(
         Optional<String> defaultModel,
         Retry retry,
         Timeouts timeouts,
-        Discovery discovery) {
+        Discovery discovery,
+        Context context) {
 
     public ProxyConfig {
         Objects.requireNonNull(listen, "listen");
@@ -39,6 +41,7 @@ public record ProxyConfig(
         Objects.requireNonNull(retry, "retry");
         Objects.requireNonNull(timeouts, "timeouts");
         Objects.requireNonNull(discovery, "discovery");
+        Objects.requireNonNull(context, "context");
     }
 
     /**
@@ -62,6 +65,8 @@ public record ProxyConfig(
      * @param discoverModels       whether to read the provider's model list from {@code GET {baseUrl}/models}
      * @param includeModels        glob patterns a discovered model must match (empty means all)
      * @param excludeModels        glob patterns of discovered models to ignore
+     * @param maxContextTokens     context size of this provider's models, if known
+     * @param modelContextTokens   context size by model glob pattern, first match wins over {@code maxContextTokens}
      */
     public record Upstream(
             String name,
@@ -72,9 +77,12 @@ public record ProxyConfig(
             Optional<Integer> maxRequestsPerMinute,
             boolean discoverModels,
             List<String> includeModels,
-            List<String> excludeModels) {
+            List<String> excludeModels,
+            Optional<Integer> maxContextTokens,
+            Map<String, Integer> modelContextTokens) {
 
         public Upstream {
+            modelContextTokens = java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(modelContextTokens));
             headers = Map.copyOf(headers);
             passthroughModels = List.copyOf(passthroughModels);
             includeModels = List.copyOf(includeModels);
@@ -131,5 +139,17 @@ public record ProxyConfig(
      * @param timeout         time allowed for one provider to answer {@code GET /models}
      */
     public record Discovery(Duration refreshInterval, Duration timeout) {
+    }
+
+    /**
+     * Request size estimation and silent truncation detection.
+     *
+     * @param charsPerToken       characters per token used to estimate request sizes
+     * @param truncationRatio     a response whose {@code prompt_tokens} is below this share of the
+     *                            estimate is reported as a possible silent truncation
+     * @param learnFromTruncation whether a suspected truncation sets that target's context limit
+     *                            (until restart) when none is configured
+     */
+    public record Context(double charsPerToken, double truncationRatio, boolean learnFromTruncation) {
     }
 }

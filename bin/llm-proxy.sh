@@ -2,6 +2,9 @@
 # Runs the LLM proxy in the background, without admin rights.
 #
 # Usage: bin/llm-proxy.sh {start|stop|restart|status|logs}
+#        bin/llm-proxy.sh probe <upstream> <model> [--min 4000] [--max 131072]
+#
+# "probe" measures the context an upstream really handles (runs in the foreground).
 #
 # Everything lives in the project folder: run/llm-proxy.pid and logs/llm-proxy.log.
 # Variables from .env (project root) are loaded when the file exists.
@@ -106,5 +109,10 @@ case "${1:-}" in
     restart) stop; start ;;
     status) status ;;
     logs) mkdir -p logs; touch "$LOG_FILE"; tail -n 50 -f "$LOG_FILE" ;;
-    *) echo "Usage: $0 {start|stop|restart|status|logs}" >&2; exit 2 ;;
+    probe)
+        shift
+        [[ -f "$JAR" ]] || { echo "Jar not found: $JAR (run: mvn clean package)" >&2; exit 1; }
+        # shellcheck disable=SC2086
+        exec "$JAVA" ${JAVA_OPTS:-} -jar "$JAR" probe --config "$CONFIG" "$@" ;;
+    *) echo "Usage: $0 {start|stop|restart|status|logs|probe <upstream> <model>}" >&2; exit 2 ;;
 esac

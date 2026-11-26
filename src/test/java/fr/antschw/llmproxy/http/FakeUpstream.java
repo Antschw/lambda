@@ -43,6 +43,7 @@ final class FakeUpstream implements AutoCloseable {
     private volatile Behavior behavior;
     private volatile List<String> models = List.of();
     private volatile int modelsStatus = 200;
+    private volatile Map<String, Integer> contextLengths = Map.of();
     private final java.util.concurrent.atomic.AtomicInteger modelRequests = new java.util.concurrent.atomic.AtomicInteger();
 
     FakeUpstream(String name) throws IOException {
@@ -54,7 +55,8 @@ final class FakeUpstream implements AutoCloseable {
             try (exchange) {
                 if (exchange.getRequestMethod().equals("GET") && exchange.getRequestURI().getPath().equals("/v1/models")) {
                     modelRequests.incrementAndGet();
-                    String data = models.stream().map(id -> "{\"id\":\"" + id + "\",\"object\":\"model\"}")
+                    String data = models.stream().map(id -> "{\"id\":\"" + id + "\",\"object\":\"model\""
+                                    + (contextLengths.containsKey(id) ? ",\"context_length\":" + contextLengths.get(id) : "") + "}")
                             .collect(java.util.stream.Collectors.joining(","));
                     send(exchange, modelsStatus, "{\"object\":\"list\",\"data\":[" + data + "]}", Map.of());
                     return;
@@ -80,6 +82,12 @@ final class FakeUpstream implements AutoCloseable {
     /** Sets the ids listed by {@code GET /v1/models} (duplicates allowed). */
     FakeUpstream models(String... ids) {
         this.models = List.of(ids);
+        return this;
+    }
+
+    /** Adds a {@code context_length} to some entries of {@code GET /v1/models}. */
+    FakeUpstream contextLengths(Map<String, Integer> lengths) {
+        this.contextLengths = Map.copyOf(lengths);
         return this;
     }
 
@@ -115,6 +123,11 @@ final class FakeUpstream implements AutoCloseable {
     static Behavior status(int status, Map<String, String> headers) {
         return (exchange, request) -> send(exchange, status,
                 "{\"error\":{\"message\":\"status " + status + "\",\"type\":\"test\"}}", headers);
+    }
+
+    /** Answers with this status and body. */
+    static Behavior status(int status, String body) {
+        return (exchange, request) -> send(exchange, status, body, Map.of());
     }
 
     static void send(HttpExchange exchange, int status, String body, Map<String, String> headers) throws IOException {

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
 import fr.antschw.llmproxy.config.ProxyConfig;
+import fr.antschw.llmproxy.routing.ContextEstimator;
 import fr.antschw.llmproxy.routing.RetryAfter;
 import fr.antschw.llmproxy.routing.Target;
 import fr.antschw.llmproxy.routing.TargetPool;
@@ -58,6 +59,11 @@ final class ForwardingHandler {
             "connection", "content-length", "transfer-encoding", "keep-alive", "upgrade", "te", "trailer",
             "proxy-authenticate", "proxy-connection", "date", "server");
 
+    private static final List<String> CONTEXT_OVERFLOW_MARKERS = List.of(
+            "context_length_exceeded", "context length", "context window", "maximum context", "too many tokens",
+            "prompt is too long", "input is too long", "reduce the length", "max_model_len", "exceeds the model",
+            "too long for the model", "string_above_max_length");
+
     /** Size of an upstream error body kept to return to the client when every attempt failed. */
     private static final int MAX_ERROR_BODY = 64 * 1024;
 
@@ -103,9 +109,17 @@ final class ForwardingHandler {
                 ? route.name()
                 : requestedModel + " (as " + route.name() + ")";
 
+        long estimatedPrompt = ContextEstimator.promptTokens(json, config.context().charsPerToken());
+        long needed = estimatedPrompt + ContextEstimator.requestedOutputTokens(json);
+        Set<Target> excluded = new HashSet<>(pool.tooSmallFor(route, needed));
+        if (!excluded.isEmpty()) {
+            LOG.info("{}: ~{} tokens estimated, skipping {} (context too small)", label, Logs.tokens(needed),
+                    excluded.stream().map(t -> t + " (limit " + Logs.tokens(pool.contextLimit(t).orElse(0L)) + ")")
+                            .toList());
+        }
+
         ProxyConfig.Retry retry = config.retry();
         Instant waitDeadline = start.plus(retry.maxWaitWhenAllCooling());
-        Set<Target> excluded = new HashSet<>();
         FailedAttempt lastFailure = null;
         int attempt = 0;
 
@@ -167,6 +181,19 @@ final class ForwardingHandler {
                             target.upstream().name(), Logs.duration(cooldown));
                     lastFailure = FailedAttempt.of(response);
                 }
+                case CLIENT_ERROR -> {
+                    FailedAttempt failure = FailedAttempt.of(response);
+                    if (!looksLikeContextOverflow(failure.body())) {
+                        LOG.info("{}: {} (client error, not retried)", prefix, status);
+                        sendRaw(exchange, status, failure);
+                        return;
+                    }
+                    // Request too long for this upstream: another one may have a larger context.
+                    excluded.add(target);
+                    LOG.warn("{}: {} context length exceeded (~{} tokens estimated), trying another upstream",
+                            prefix, status, Logs.tokens(needed));
+                    lastFailure = failure;
+                }
                 case NOT_FOUND -> {
                     // Model or endpoint unknown to this upstream: try another one, without cooldown,
                     // since the same upstream may serve other requests fine.
@@ -179,16 +206,49 @@ final class ForwardingHandler {
                     if (status < 400) {
                         pool.onSuccess(target);
                     }
-                    LOG.info("{}: {} after {}", prefix, status, Logs.duration(Duration.between(start, clock.instant())));
-                    stream(exchange, response, target);
-                    LOG.debug("{}: response completed after {}", prefix,
-                            Logs.duration(Duration.between(start, clock.instant())));
+                    Duration firstByte = Duration.between(start, clock.instant());
+                    UsageObserver usage = new UsageObserver(response.headers().firstValue("Content-Type").orElse(null));
+                    stream(exchange, response, target, usage);
+                    usage.finish();
+                    logOutcome(prefix, status, firstByte, Duration.between(start, clock.instant()), target,
+                            estimatedPrompt, usage);
                     return;
                 }
             }
         }
 
         sendFinalFailure(exchange, route, label, attempt, lastFailure);
+    }
+
+    private void logOutcome(String prefix, int status, Duration firstByte, Duration total, Target target,
+                            long estimatedPrompt, UsageObserver usage) {
+        StringBuilder line = new StringBuilder().append(status).append(" in ").append(Logs.duration(total))
+                .append(" (first byte ").append(Logs.duration(firstByte)).append(")");
+        if (estimatedPrompt > 0) {
+            line.append(", ~").append(Logs.tokens(estimatedPrompt)).append(" tokens sent");
+        }
+        usage.promptTokens().ifPresent(p -> line.append(", upstream counted ").append(Logs.tokens(p)));
+        usage.completionTokens().ifPresent(c -> line.append(" + ").append(Logs.tokens(c)).append(" out"));
+        usage.finishReason().ifPresent(f -> line.append(", finish=").append(f));
+        LOG.info("{}: {}", prefix, line);
+
+        if (status < 300 && usage.promptTokens().isPresent()
+                && pool.onUsage(target, estimatedPrompt, usage.promptTokens().get())) {
+            LOG.warn("{}: possible silent truncation: ~{} tokens sent but upstream counted {}. The start of the "
+                            + "conversation was probably dropped. Measure the real context with "
+                            + "'bin/llm-proxy.sh probe {} {}' and set maxContextTokens for '{}'", prefix,
+                    Logs.tokens(estimatedPrompt), Logs.tokens(usage.promptTokens().get()), target.upstream().name(),
+                    target.model(), target.upstream().name());
+        }
+        if ("length".equals(usage.finishReason().orElse(null))) {
+            LOG.warn("{}: the answer was cut by the output token limit (finish=length)", prefix);
+        }
+    }
+
+    /** Recognises the usual "context too long" errors of OpenAI-compatible servers. */
+    static boolean looksLikeContextOverflow(byte[] body) {
+        String text = new String(body, java.nio.charset.StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
+        return CONTEXT_OVERFLOW_MARKERS.stream().anyMatch(text::contains);
     }
 
     private void sendFinalFailure(HttpExchange exchange, Route route, String label, int attempts,
@@ -257,8 +317,8 @@ final class ForwardingHandler {
      * Copies the upstream response to the client, flushing after each read so server-sent events
      * reach the client as soon as the upstream produces them.
      */
-    private static void stream(HttpExchange exchange, HttpResponse<InputStream> response, Target target)
-            throws IOException {
+    private static void stream(HttpExchange exchange, HttpResponse<InputStream> response, Target target,
+                               UsageObserver usage) throws IOException {
         response.headers().map().forEach((name, values) -> {
             String lower = name.toLowerCase(Locale.ROOT);
             if (!lower.startsWith(":") && !DROPPED_RESPONSE_HEADERS.contains(lower)) {
@@ -281,6 +341,7 @@ final class ForwardingHandler {
                 try {
                     out.write(buffer, 0, read);
                     out.flush();
+                    usage.accept(buffer, read);
                 } catch (IOException e) {
                     // Closing the upstream stream (try-with-resources) cancels the upstream request.
                     LOG.info("Client disconnected from {} stream", target);
@@ -319,6 +380,7 @@ final class ForwardingHandler {
             case 401, 403 -> Outcome.MISCONFIGURED;
             case 404 -> Outcome.NOT_FOUND;
             case 408, 500, 502, 503, 504 -> Outcome.RETRYABLE;
+            case 400, 413 -> Outcome.CLIENT_ERROR;
             default -> status >= 520 && status <= 599 ? Outcome.RETRYABLE : Outcome.PASS_THROUGH;
         };
     }
@@ -331,6 +393,8 @@ final class ForwardingHandler {
         RETRYABLE,
         /** Bad credentials: long cooldown and try the next target. */
         MISCONFIGURED,
+        /** 400/413: retried elsewhere only if the body says the context is too long. */
+        CLIENT_ERROR,
         /** Unknown model or endpoint on this upstream: try another target for this request only. */
         NOT_FOUND,
         /** Success, or a client error the client must see (e.g. 400): send it as is. */

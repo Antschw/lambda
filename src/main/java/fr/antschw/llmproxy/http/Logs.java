@@ -18,9 +18,17 @@ final class Logs {
             return millis + "ms";
         }
         if (millis < 60_000) {
-            return millis % 1_000 == 0 ? millis / 1_000 + "s" : String.format("%.1fs", millis / 1_000.0);
+            return millis % 1_000 == 0 ? millis / 1_000 + "s" : String.format(java.util.Locale.ROOT, "%.1fs", millis / 1_000.0);
         }
         long seconds = millis / 1_000;
         return seconds / 60 + "m" + (seconds % 60 == 0 ? "" : seconds % 60 + "s");
+    }
+
+    /**
+     * @param tokens a token count
+     * @return a compact form such as {@code 812} or {@code 41.2k}
+     */
+    static String tokens(long tokens) {
+        return tokens < 1_000 ? Long.toString(tokens) : String.format(java.util.Locale.ROOT, "%.1fk", tokens / 1_000.0);
     }
 }

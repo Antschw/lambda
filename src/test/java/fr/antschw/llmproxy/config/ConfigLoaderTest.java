@@ -42,6 +42,23 @@ class ConfigLoaderTest {
         assertThat(config.discovery().timeout()).isEqualTo(Duration.ofSeconds(10));
         assertThat(config.upstreams().getFirst().discoverModels()).isTrue();
         assertThat(config.upstreams().getFirst().excludeModels()).isEmpty();
+        assertThat(config.upstreams().getFirst().maxContextTokens()).isEmpty();
+        assertThat(config.context()).isEqualTo(new ProxyConfig.Context(3.5, 0.6, false));
+    }
+
+    @Test
+    void readsContextLimitsInOrder() {
+        ProxyConfig config = loader.parse("""
+                {
+                  "upstreams": [{"name": "a", "baseUrl": "https://a/v1", "apiKey": "k", "maxContextTokens": 32000,
+                                 "modelContextTokens": {"z-*": 8000, "a-*": 128000}}],
+                  "context": {"charsPerToken": 3, "truncationRatio": 0.5, "learnFromTruncation": true}
+                }""");
+
+        ProxyConfig.Upstream upstream = config.upstreams().getFirst();
+        assertThat(upstream.maxContextTokens()).hasValue(32_000);
+        assertThat(upstream.modelContextTokens().keySet()).containsExactly("z-*", "a-*");
+        assertThat(config.context()).isEqualTo(new ProxyConfig.Context(3.0, 0.5, true));
     }
 
     @Test
@@ -119,7 +136,12 @@ class ConfigLoaderTest {
                 Arguments.of("{\"upstreams\": [" + upstream + "}, " + upstream + "}]}", "Duplicate upstream name"),
                 Arguments.of(passthrough + ", \"defaultModel\": \"z\"}", "defaultModel 'z'"),
                 Arguments.of(passthrough + ", \"retry\": {\"maxCooldown\": \"soon\"}}", "'maxCooldown'"),
-                Arguments.of(passthrough + ", \"retry\": {\"maxAttempts\": 0}}", "maxAttempts must be at least 1"));
+                Arguments.of(passthrough + ", \"retry\": {\"maxAttempts\": 0}}", "maxAttempts must be at least 1"),
+                Arguments.of("{\"upstreams\": [" + upstream + ", \"maxContextTokens\": 0}]}", "maxContextTokens must be at least 1"),
+                Arguments.of("{\"upstreams\": [" + upstream + ", \"modelContextTokens\": {\"m\": \"big\"}}]}",
+                        "must be a positive integer"),
+                Arguments.of(passthrough + ", \"context\": {\"charsPerToken\": 0}}", "charsPerToken must be greater than 0"),
+                Arguments.of(passthrough + ", \"context\": {\"truncationRatio\": 2}}", "truncationRatio"));
     }
 
     @ParameterizedTest

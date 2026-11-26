@@ -15,6 +15,9 @@ final class TargetState {
     private long successes;
     private long rateLimited;
     private long failures;
+    private long maxPromptTokensSeen;
+    private long truncationsSuspected;
+    private long learnedLimit;
 
     synchronized boolean isCooling(Instant now) {
         return now.isBefore(cooldownUntil);
@@ -67,9 +70,30 @@ final class TargetState {
         extendCooldown(now.plus(cooldown));
     }
 
+    /**
+     * Records the prompt size the upstream reported for a request.
+     *
+     * @param promptTokens tokens the upstream says it processed
+     * @param truncated    whether this looks like a silent truncation
+     */
+    synchronized void recordUsage(long promptTokens, boolean truncated) {
+        maxPromptTokensSeen = Math.max(maxPromptTokensSeen, promptTokens);
+        if (truncated) {
+            truncationsSuspected++;
+            // The upstream processed at most its real context: remember the largest such value.
+            learnedLimit = Math.max(learnedLimit, promptTokens);
+        }
+    }
+
+    /** @return the context limit deduced from suspected truncations, or 0 if none */
+    synchronized long learnedLimit() {
+        return learnedLimit;
+    }
+
     synchronized Snapshot snapshot(Instant now) {
         return new Snapshot(isCooling(now), isCooling(now) ? cooldownUntil : null, consecutiveFailures,
-                misconfigured, requests, successes, rateLimited, failures);
+                misconfigured, requests, successes, rateLimited, failures, maxPromptTokensSeen,
+                truncationsSuspected);
     }
 
     private void extendCooldown(Instant until) {
@@ -85,6 +109,7 @@ final class TargetState {
 
     /** Point-in-time view of a target state, for the health endpoint. */
     record Snapshot(boolean cooling, Instant cooldownUntil, int consecutiveFailures, boolean misconfigured,
-                    long requests, long successes, long rateLimited, long failures) {
+                    long requests, long successes, long rateLimited, long failures, long maxPromptTokensSeen,
+                    long truncationsSuspected) {
     }
 }

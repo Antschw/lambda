@@ -16,7 +16,9 @@
       "name": "provider-b",
       "baseUrl": "https://api.provider-b.example/v1",
       "apiKey": "${PROVIDER_B_API_KEY}",
-      "excludeModels": ["*embed*"]
+      "excludeModels": ["*embed*"],
+      "maxContextTokens": 32000,
+      "modelContextTokens": { "*-128k": 128000 }
     },
     {
       "name": "provider-c",
@@ -41,6 +43,11 @@
     "maxCooldown": "5m",
     "misconfiguredCooldown": "10m",
     "maxWaitWhenAllCooling": "60s"
+  },
+  "context": {
+    "charsPerToken": 3.5,
+    "truncationRatio": 0.6,
+    "learnFromTruncation": false
   },
   "discovery": {
     "refreshInterval": "1h",

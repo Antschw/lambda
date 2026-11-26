@@ -114,7 +114,7 @@ public final class ProxyServer implements AutoCloseable {
     /** Reads the upstreams' model lists now and updates the routes. */
     public void refreshModels() {
         List<String> before = pool.modelNames();
-        pool.updateModels(discovery.discover());
+        pool.updateModels(discovery.discover(), discovery.advertisedLimits());
         List<String> after = pool.modelNames();
         if (!after.equals(before)) {
             List<String> added = after.stream().filter(m -> !before.contains(m)).toList();
@@ -217,6 +217,7 @@ public final class ProxyServer implements AutoCloseable {
         // Non-standard but harmless for clients: shows where the model is routed.
         ArrayNode upstreams = node.putArray("upstreams");
         pool.upstreamsOf(name).forEach(upstreams::add);
+        pool.largestContextLimit(name).ifPresent(limit -> node.put("context_length", limit));
         return node;
     }
 
@@ -237,7 +238,10 @@ public final class ProxyServer implements AutoCloseable {
                         .put("requests", t.requests())
                         .put("successes", t.successes())
                         .put("rateLimited", t.rateLimited())
-                        .put("failures", t.failures());
+                        .put("failures", t.failures())
+                        .put("maxPromptTokensSeen", t.maxPromptTokensSeen())
+                        .put("truncationsSuspected", t.truncationsSuspected());
+                t.contextLimit().ifPresent(limit -> node.put("contextLimit", limit));
                 if (t.cooldownUntil() != null) {
                     node.put("cooldownUntil", t.cooldownUntil().toString());
                 }

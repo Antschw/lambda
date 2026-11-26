@@ -4,6 +4,9 @@
 
 .DESCRIPTION
     Usage: powershell -ExecutionPolicy Bypass -File bin\llm-proxy.ps1 start|stop|restart|status|logs
+           powershell -ExecutionPolicy Bypass -File bin\llm-proxy.ps1 probe <upstream> <model> [min=4000] [max=131072]
+
+    "probe" measures the context an upstream really handles (runs in the foreground).
 
     Everything lives in the project folder: run\llm-proxy.pid, logs\llm-proxy.log and
     logs\llm-proxy.err.log (both overwritten at each start). Variables from .env (project root)
@@ -16,8 +19,11 @@
 #>
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('start', 'stop', 'restart', 'status', 'logs')]
-    [string] $Command = 'status'
+    [ValidateSet('start', 'stop', 'restart', 'status', 'logs', 'probe')]
+    [string] $Command = 'status',
+
+    [Parameter(Position = 1, ValueFromRemainingArguments = $true)]
+    [string[]] $Rest = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -116,4 +122,11 @@ switch ($Command) {
     'restart' { Stop-Proxy; Start-Proxy }
     'status' { Show-Status }
     'logs' { Get-Content $LogFile -Tail 50 -Wait }
+    'probe' {
+        if (-not (Test-Path $Jar)) { throw "Jar not found: $Jar (run: mvn clean package)" }
+        $javaArgs = @()
+        if ($JavaOpts -ne '') { $javaArgs += $JavaOpts.Split(' ', [StringSplitOptions]::RemoveEmptyEntries) }
+        & $Java @javaArgs -jar $Jar probe "config=$Config" @Rest
+        exit $LASTEXITCODE
+    }
 }
